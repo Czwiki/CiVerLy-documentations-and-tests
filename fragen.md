@@ -23,3 +23,5 @@ Angriff suchen mit 70+24 Angriff, oberflächlicher Abgleich mit meiner Analyse
 
 generate test vectors with reference implementation 
 try to benchmark against all-in-one-differential papter results on KATAN-32
+
+https://eprint.iacr.org/2012/401.pdf
