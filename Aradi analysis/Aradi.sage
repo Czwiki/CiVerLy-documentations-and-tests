@@ -1,4 +1,4 @@
-from civerly.cipher_implementations.katan import KATAN_CVL
+from civerly.cipher_implementations.aradi import ARADI_CVL
 from civerly.model_options import *
 
 katan = KATAN_CVL(R=50)
