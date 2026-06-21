@@ -1,0 +1,12 @@
+Testing key: 0
+Testing key: 1ext: 4294000000
+Testing key: 2ext: 4294000000
+Testing key: 3ext: 4294000000
+Testing key: 4ext: 4294000000
+Testing key: 5ext: 4294000000
+Testing key: 6ext: 4294000000
+Testing key: 7ext: 4294000000
+Testing key: 8ext: 4294000000
+Testing key: 9ext: 4294000000
+Number of matching output differences: 44
+Differential probability ≈ 2^(-26.54)
