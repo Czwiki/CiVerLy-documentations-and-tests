@@ -9,4 +9,4 @@ Testing key: 7ext: 4294000000
 Testing key: 8ext: 4294000000
 Testing key: 9ext: 4294000000
 Number of matching output differences: 44
-Differential probability ≈ 2^(-26.54)
+Differential probability ≈ 2^(-29.86)

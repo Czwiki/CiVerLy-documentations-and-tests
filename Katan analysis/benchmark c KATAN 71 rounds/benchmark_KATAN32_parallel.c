@@ -1,8 +1,17 @@
 /*From https://gist.github.com/raullenchai/2712516*/
+/* PARALLELISIERTE VERSION mit fork() und Semaphoren */
 
 #include <stdio.h>
 #include <stdint.h>
 #include <math.h>
+#include <semaphore.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <string.h>
+#include <stdlib.h>
 
 /*
 Fork From http://www.cs.technion.ac.il/~orrd/KATAN/katan.c
@@ -336,6 +345,7 @@ void katan64_decrypt( const u64 cipher[64], u64 plain[64], const u64 key[80], in
     plain[i+39] = L1[i];
 
 }
+
 static void bits_from_u32(uint32_t value, u64 bits[32]) {
   for (int i = 0; i < 32; ++i) {
     bits[i] = (value >> i) & 1U;
@@ -350,10 +360,7 @@ static uint32_t u32_from_bits(const u64 bits[32]) {
   return value;
 }
 
-// counting the number of matching output differences for a given input difference and some sample keys over all plaintexts
-
 void katan32_encrypt_without_key_schedule(const u64 plain[32], u64 cipher[32], const u64 k[], int rounds) {
-  // just removed the key schedule from the encryption function, to avoid recomputing it for each plaintext
   u64 L1[13], L2[19], fa, fb;
   int i,j;
 
@@ -383,58 +390,138 @@ void katan32_encrypt_without_key_schedule(const u64 plain[32], u64 cipher[32], c
 
 void katan32_key_schedule_precomputation(const u64 key[80], u64 k[], int rounds) {
   int i;
-  //key schedule copied outside of the encryption loop
   for(i=0;i<80;++i)
     k[i]=key[i];
   for(i=80;i<2*rounds;++i)
     k[i]=k[i-80] ^ k[i-61] ^ k[i-50] ^ k[i-13] ;
 }
 
-int main() {
-  uint32_t input_diff = 0x00008010; // input Difference found by CiVerLy
+// ============ PARALLELISIERUNGSCODE ============
+
+typedef struct {
+  unsigned long long match;
+  int num_children;
+} shared_data_t;
+
+void worker_process(int key, int num_children, int child_id, u64 k[], int rounds, 
+                    int shmid, sem_t *sem, uint32_t input_diff) {
   uint64_t all_plain = 1ULL << 32;
-  unsigned long long match = 0;
-  int rounds = 71;
+  uint64_t chunk = all_plain / num_children;
+  uint64_t start = child_id * chunk;
+  uint64_t end = (child_id == num_children - 1) ? all_plain : (child_id + 1) * chunk;
+  
   u64 plain1[32], plain2[32], cipher1[32], cipher2[32];
-
-  for (int key=0; key<10; key++) {
-    u64 key_array[80];
-    for (int i=0; i<80; i++) {
-        key_array[i] = 0;
+  unsigned long long local_match = 0;
+  
+  for (uint64_t plain = start; plain < end; plain++) {
+    uint32_t p1 = (uint32_t)plain;
+    uint32_t p2 = p1 ^ input_diff;
+    
+    bits_from_u32(p1, plain1);
+    bits_from_u32(p2, plain2);
+    
+    katan32_encrypt_without_key_schedule(plain1, cipher1, k, rounds);
+    katan32_encrypt_without_key_schedule(plain2, cipher2, k, rounds);
+    
+    uint32_t c1 = u32_from_bits(cipher1);
+    uint32_t c2 = u32_from_bits(cipher2);
+    if ((c1 ^ c2) == 0x08000020U) {
+      local_match++;
     }
-
-    for (int i=0; i<32; i++) {
-        key_array[i] = (key >> i) & 1;
-    }
-    u64 k[2*rounds];
-    katan32_key_schedule_precomputation(key_array, k, rounds);
-    printf("Testing key: %u\n", key);
-    for (uint64_t plain=0; plain<all_plain; plain++) {
-      
-      uint32_t p1 = (uint32_t) plain;
-      uint32_t p2 = p1 ^ input_diff;
-
-      bits_from_u32(p1, plain1);
-      bits_from_u32(p2, plain2);
-
-      katan32_encrypt_without_key_schedule(plain1, cipher1, k, rounds);
-      katan32_encrypt_without_key_schedule(plain2, cipher2, k, rounds);
-
-      uint32_t c1 = u32_from_bits(cipher1);
-      uint32_t c2 = u32_from_bits(cipher2);
-      if ((c1 ^ c2) == 0x08000020U) {
-        match++;
-      }
-      if (plain % 1000000 == 0) {
-        printf("Testing plaintext: %u\r", (uint32_t)plain);
-      }
+    
+    if (plain % 10000000 == 0) {
+      printf("[Child %d] Plaintext: %llu\r", child_id, plain);
+      fflush(stdout);
     }
   }
-  printf("Number of matching output differences: %llu\n", match);
-  double weight = log2((double)all_plain / (double)match);
-  printf("Differential probability ≈ 2^(-%.2f)\n", weight);
+  
+  // Kritischer Bereich: Zugriff auf gemeinsamen Speicher mit Semaphor schützen
+  shared_data_t *data = (shared_data_t *)shmat(shmid, NULL, 0);
+  sem_wait(sem);
+  data->match += local_match;
+  sem_post(sem);
+  shmdt(data);
+  
+  printf("\n[Child %d] Abgeschlossen. Lokale Treffer: %llu\n", child_id, local_match);
+  exit(0);
+}
 
+int main() {
+  uint32_t input_diff = 0x00008010;
+  int rounds = 71;
+  int num_children = 4;  // Anzahl der parallelen Prozesse
+  
+  // Shared Memory erstellen
+  int shmid = shmget(IPC_PRIVATE, sizeof(shared_data_t), IPC_CREAT | 0666);
+  if (shmid < 0) {
+    perror("shmget");
+    return 1;
+  }
+  
+  shared_data_t *shared_data = (shared_data_t *)shmat(shmid, NULL, 0);
+  if (shared_data == (void *)-1) {
+    perror("shmat");
+    return 1;
+  }
+  
+  shared_data->match = 0;
+  shared_data->num_children = num_children;
+  
+  // Semaphor erstellen (unnamed semaphore)
+  sem_t sem;
+  if (sem_init(&sem, 1, 1) == -1) {
+    perror("sem_init");
+    return 1;
+  }
+  
+  // Hauptschleife über Keys
+  for (int key = 0; key < 10; key++) {
+    shared_data->match = 0;  // Reset für jeden Key
+    
+    u64 key_array[80];
+    for (int i = 0; i < 80; i++) {
+      key_array[i] = 0;
+    }
+    for (int i = 0; i < 32; i++) {
+      key_array[i] = (key >> i) & 1;
+    }
+    
+    u64 k[2 * rounds];
+    katan32_key_schedule_precomputation(key_array, k, rounds);
+    
+    printf("\n========== Testing key: %u ==========\n", key);
+    
+    // Child-Prozesse forken
+    pid_t pids[num_children];
+    for (int i = 0; i < num_children; i++) {
+      pids[i] = fork();
+      if (pids[i] == 0) {
+        // Im Child-Prozess
+        worker_process(key, num_children, i, k, rounds, shmid, &sem, input_diff);
+      } else if (pids[i] < 0) {
+        perror("fork");
+        return 1;
+      }
+    }
+    
+    // Auf alle Children warten
+    for (int i = 0; i < num_children; i++) {
+      waitpid(pids[i], NULL, 0);
+    }
+    
+    // Ergebnisse ausgeben
+    printf("\nNumber of matching output differences: %llu\n", shared_data->match);
+    double all_plain = 1ULL << 32;
+    double weight = log2(all_plain / (double)shared_data->match);
+    printf("Differential probability ≈ 2^(-%.2f)\n", weight);
+  }
+  
+  // Aufräumen
+  sem_destroy(&sem);
+  shmdt(shared_data);
+  shmctl(shmid, IPC_RMID, NULL);
+  
   return 0;
 }
 
-// gcc -Ofast -march=native -flto -funroll-loops -DNDEBUG -o katan katan.c -lm
+// Kompilieren: gcc -Ofast -march=native -flto -funroll-loops -DNDEBUG -o katan_parallel benchmark_KATAN32_parallel.c -lm -lpthread
