@@ -60,78 +60,6 @@ If you want it even deeper, I can also:
 
 Made changes.
 
-date: 2026-05-25T 10:45:00Z
-participants:
-- You: Henry
-- Assistant: VS Code Copilot Chat, GPT 5.4 mini
-tooling:
-vscode: "1.21.0"
-topic: "Planning of Implementation"
-
-User: Please review this implementation guide for new ciphers. Please include some details to classes and modules that are commonly used and cover common pitfalls.
-
-GitHub Copilot: Optimized tool selection. I’m checking the guide against the actual cipher modules and examples so I can tighten the recommendations where the codebase already has clear patterns, then I’ll patch the README directly.
-
-Read [](file:///home/user/CiVerLy-forked/documentation/README.md)
-
-Searched for files matching `**/aes.py`, 1 match
-
-Searched for files matching `**/present.py`, 1 match
-
-Searched for files matching `**/abc.py`, 1 match
-
-I’ve confirmed the guide is broadly sound, but it’s light on the concrete entry points developers actually import. I’m reading the canonical examples now so I can name the right classes and point out the pitfalls that show up in real implementations.
-
-Read [](file:///home/user/CiVerLy-forked/src/civerly/cipher_implementations/aes.py#1-1), lines 1 to 260
-
-Read [](file:///home/user/CiVerLy-forked/src/civerly/cipher_implementations/present.py#1-1), lines 1 to 260
-
-Read [](file:///home/user/CiVerLy-forked/src/civerly/cipher_implementations/abc.py)
-
-Read [](file:///home/user/CiVerLy-forked/src/civerly/component.py#1-1), lines 1 to 260
-
-The examples confirm a few practical details worth folding into the guide: which imports are used in real ciphers, where SAT vs MILP breaks, and what “Unnamed Component” means in trail checks. I’m grabbing the base classes next so the guide points at the right modules, not just the right ideas.
-
-Read [](file:///home/user/CiVerLy-forked/src/civerly/sboxcipher.py#1-1), lines 1 to 220
-
-Read [](file:///home/user/CiVerLy-forked/src/civerly/wordbasedcipher.py)
-
-Read [](file:///home/user/CiVerLy-forked/src/civerly/wordsboxcipher.py)
-
-Read [](file:///home/user/CiVerLy-forked/src/civerly/aeslike.py)
-
-I have enough context to make a focused update now. The patch will add the concrete module/class names people actually import, fix the incomplete key-schedule guidance, and sharpen the pitfall list around the most common wiring and modeling mistakes.
-
-Apply Patch
-
-The first patch draft was rejected on format, so I’m resubmitting the same focused update with the required tool metadata.
-
-Generating patch (100 lines) in [](file:///home/user/CiVerLy-forked/documentation/README.md)
-
-
-```
-
-```
-The README patch is in place. I’m doing a narrow validation pass on just that file now to make sure the edits stayed localized and the revised wording reads cleanly.
-
-Ran terminal command:  git diff -- documentation/README.md
-
-`git diff` came back empty, so I’m checking repository status directly to confirm the file is tracked in the current worktree and to verify the exact scope of the change.
-
-Ran terminal command:  git status --short && git diff --stat -- documentation/README.md
-
-The repository is treating the whole documentation folder as untracked, so `git diff` is not useful here. I’m verifying the edited content directly instead of relying on git output.
-
-Read [](file:///home/user/CiVerLy-forked/documentation/README.md)
-
-Read [](file:///home/user/CiVerLy-forked/documentation/README.md#200-200), lines 200 to 200
-
-I updated documentation/README.md to make the guide more concrete and implementation-oriented. The revised version now names the commonly used modules and classes developers actually import, points to the existing cipher patterns in aes.py, present.py, abc.py, and `skinny.py`, and expands the component guidance with the usual `civerly.component` building blocks.
-
-I also tightened the key-schedule section, added more explicit test and doctest guidance, and expanded the pitfalls list around the issues that most often break modeling: word-vs-bit edge wiring, unsupported component combinations, matrix shape/type mismatches, and AESlike column alignment. I validated the edited content directly in the file; git diff was not useful here because the documentation folder is currently treated as untracked in this worktree.
-
-Made changes.
-
 date: 2026-05-25T 13:00:00Z
 participants:
 - You: Henry
@@ -142,7 +70,7 @@ topic: "Planning of Implementation"
 
 User: Please review this implementation guide for new ciphers. Please include some details to classes and modules that are commonly used and cover common pitfalls.
 
-GitHub Copilot: Optimized tool selectionI’m checking the guide against the actual cipher modules and examples so I can tighten the recommendations where the codebase already has clear patterns, then I’ll patch the README directly.
+GitHub Copilot: Optimized tool selection. I’m checking the guide against the actual cipher modules and examples so I can tighten the recommendations where the codebase already has clear patterns, then I’ll patch the README directly.
 
 Read [](file:///home/user/CiVerLy-forked/documentation/README.md)
 
