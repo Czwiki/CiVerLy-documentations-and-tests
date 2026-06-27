@@ -1,7 +1,13 @@
 from civerly.cipher_implementations.aradi import ARADI_CVL
 from civerly.model_options import *
+from civerly.solvers import SCIP_CVL, GUROBI_CVL, GLPK_CVL
 
-katan = KATAN_CVL(R=50)
-model_options = MODEL_OPTIONS(cryptanalysis=CRYPTANALYSIS.DIFFERENTIAL, optimization=OPTIMIZATION.SAT, granularity=GRANULARITY.BITWISE, sbox_modeling=SBOX_MODELING.LOGICAL_COND_ESPRESSO, sat_solver=CADICAL_CVL(), logic_minimizer=ESPRESSO_CVL(), path=Path(".")) 
-katan.analyse(model_options)
-katan.generate_report(model_options)
+aradi = ARADI_CVL(R=5, rks=[0,0,0,0,0,0])
+model_options = model_options = MODEL_OPTIONS(cryptanalysis=CRYPTANALYSIS.DIFFERENTIAL, optimization=OPTIMIZATION.MILP, granularity=GRANULARITY.BITWISE, sbox_modeling=SBOX_MODELING.CONVEX_HULL, linear_layer_modeling=LINEAR_LAYER_MODELING.CONVEX_HULL, path=Path("./temp"))
+aradi.model(model_options)
+# .mps file is created
+scip = SCIP_CVL()
+scip.invoke(Path("./temp"), Path("./temp"), time_limit=5) # isinstance assertion fails
+# This next? aradi.generate_report(model_options)
+
+#results, objective = solver.process_solution_file(output_file)
