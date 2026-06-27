@@ -7,7 +7,7 @@ model_options = model_options = MODEL_OPTIONS(cryptanalysis=CRYPTANALYSIS.DIFFER
 aradi.model(model_options)
 # .mps file is created
 scip = SCIP_CVL()
-scip.invoke(Path("./temp"), Path("./temp"), time_limit=5) # isinstance assertion fails
+scip.invoke(Path("./temp"), Path("./temp")) # timeouts!!!
 # This next? aradi.generate_report(model_options)
 
 #results, objective = solver.process_solution_file(output_file)
