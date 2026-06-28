@@ -603,7 +603,9 @@ Total time for all tests: 0.7 seconds
     cumulative wall time: 0.6 seconds
 Features detected for doctesting:
 
-This is the output of the doctest of blink.py in the cipher_implementations directory. Please correct the exsisting doctets or resprectively the implementation of the cipher to complete the doctests. Information on the cipher and the implementation can be found in the documentation directory
+This is the output of the doctest of blink.py in the cipher_implementations directory. Please correct the exsisting doctets or resprectively the implementation of the cipher to complete the doctests. Information on the cipher and the implementation can be found in the documentation directory.
+
+
 The user is showing me doctest failures for a BLINK cipher implementation. The error is: IndexError: len(edges) = 64 != sub_cipher.input_length = 16
 
 This is happening in the add_subcipher method when adding a mixcolumn cipher. The edges list has 64 elements but the sub_cipher expects 16 inputs.
@@ -776,6 +778,8 @@ Features detected for doctesting:
 -------------
 third commit
 -------------
+
+User: Doctest output
 
 Now I understand the issue. Looking at the error more carefully:
 
@@ -1770,3 +1774,10 @@ Modified
 ------------
 fourth commit
 ------------
+
+Added back the specifications from the paper 
+
+------------
+fifth commit
+------------
+
