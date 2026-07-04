@@ -1,3 +1,6 @@
+Prompt for this task: Your task is located at @blink documentation/task.md , the specifications can be found at @blink documentation/blink.md .
+
+
 Task
 
 Implement the tweakable block cipher Blink in Python as a working reference implementation.
