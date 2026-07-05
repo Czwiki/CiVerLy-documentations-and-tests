@@ -4709,3 +4709,4875 @@ Documentation update:
 documentation/BLINK_IMPLEMENTATION.md now documents the new testing utilities and explains the current status regarding the paper's test vectors.
 Note on test vectors: The THF_Blink_Encryptor produces deterministic ciphertexts for the paper's test inputs but does not yet match the exact expected values (e.g., Blink-64a yields 0xa09a803255fdb13b vs. the paper's 0xa4a0d10502be846e). After extensive brute-force investigation of all reasonable structural variants, the mismatch appears to stem from subtle THF construction details (exact π definitions, potential dh(t) handling, or bottom-half key-indexing conventions) that require the reference Verilog implementation for unambiguous confirmation.
 
+---------
+seventh commit
+---------
+05.07.2026, Kilo AI, Kimi 2.6 via Neuralwatt
+
+User:
+
+You can find a working implementation of blink in @documentation/blink.py . Please use it to correct the current CiVerLy implementation of this cipher in @src/civerly/cipher_implementations/blink.py . The test vectors can also be found in @documentation/blink.py .
+
+The user wants me to correct the CiVerLy implementation of the Blink cipher in src/civerly/cipher_implementations/blink.py using the working reference implementation in documentation/blink.py.
+
+Let me analyze the differences between the two implementations:
+
+The reference implementation (documentation/blink.py) has a full working implementation with test vectors that all pass.
+The CiVerLy implementation (src/civerly/cipher_implementations/blink.py) has:
+BLINK64_CVL and BLINK128_CVL classes that implement the round function as a CiVerLy cipher object
+A THF_Blink_Encryptor class that attempts to implement the full THF mode but has a note saying it doesn't match the expected test vectors
+The user wants me to use the working implementation to correct the CiVerLy implementation.
+
+Looking at the reference implementation:
+
+It has state_bytes, tweak_bytes, key_bytes, ra, rb, pbox, round_const, round_const_prime
+Six variants: Blink_64a, Blink_64b, Blink_128a, Blink_128b, Blink_128A, Blink_128B
+Uses byte arrays and manual bit/nibble operations
+The test vectors all pass
+Looking at the CiVerLy implementation:
+
+BLINK64_CVL and BLINK128_CVL are the main cipher classes
+THF_Blink_Encryptor is a standalone encryptor for testing
+It has round constants, key schedule, Toeplitz hash
+The THF_Blink_Encryptor has a note saying it doesn't match expected values
+The key differences I need to understand:
+
+The reference uses byte lists and processes them in place
+The reference has specific ra and rb parameters
+The reference handles hash generation and key schedule differently
+The round constants in the reference are byte arrays, while in CiVerLy they are integers
+The reference has a generate_round_key method that derives hash keys from k_prime using specific byte-level shifts
+The reference encrypt method follows a specific structure: whitening, ra rounds with constants, hash, rb rounds with constants, reflector, inverse rb rounds with rc', hash, inverse ra rounds with rc', whitening
+Let me carefully compare the THF_Blink_Encryptor in CiVerLy with the reference BlinkCipher:
+
+Reference encrypt structure:
+
+whitening(state, w[0])
+for r in range(ra): sub, mix, ark(rk[r]), arc(const[r]), perm
+sub, mix, ark(h[0]), perm
+for r in range(rb): sub, mix, ark(rk[r+ra]), arc(const[r+ra]), perm
+h_xor = h[0] ^ h[1]
+sub, mix, ark(h_xor), sub
+for r in range(rb): inv_perm, arc(rc_prime[r]), ark(rk[r]), mix, sub
+inv_perm, ark(h[1]), mix, sub
+for r in range(ra): inv_perm, arc(rc_prime[r+rb]), ark(rk[r+rb]), mix, sub
+whitening(state, w[1])
+CiVerLy THF_Blink_Encryptor structure:
+
+state = m ^ w1
+for i in range(a): fwd_round(state, rk[i] ^ rc[i])
+state ^= h1
+for i in range(b): fwd_round(state, rk[a+i] ^ rc[a+i])
+reflector: sbox, mix ^ h, sbox
+for i in range(b): inv_round(state, drk[i] ^ rc_prime[i])
+state ^= h2
+for i in range(a): inv_round(state, drk[b+i] ^ rc_prime[b+i])
+state ^= w2
+There are some differences in round structure:
+
+In reference, round = S -> M -> AK -> AC -> P
+In CiVerLy, _round_fwd = P(AK(M(S(state))) ^ key) which is S -> M -> AK -> P (no AC!)
+Wait, let me look more carefully at the reference:
+
+for r in range(self.ra):
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, rk[r])
+    self.add_round_constant(state, self.round_const[r])
+    self.permutation(state)
+So round = S -> M -> AK -> AC -> P
+
+But in the CiVerLy THF_Blink_Encryptor:
+
+def _round_fwd(self, state, key):
+    return self._apply_perm(int(state) ^ int(self._apply_mix(self._apply_sbox(state))) ^ int(key))
+Wait, that's not right. Let me parse it: self._apply_mix(self._apply_sbox(state)) = M(S(state)) int(state) ^ int(...) - wait, state is already the input. So it's state ^ M(S(state)) ^ key. That's not the same as M(S(state)) ^ key.
+
+Hmm, actually looking more carefully: _round_fwd(self, state, key): return self._apply_perm(int(state) ^ int(self._apply_mix(self._apply_sbox(state))) ^ int(key))
+
+Wait, that would be P(state ^ M(S(state)) ^ key). That's completely wrong! The XOR with state shouldn't be there. It should be P(M(S(state)) ^ key).
+
+But wait, looking at BLINK64_CVL:
+
+node = blink_round.add_subcipher(sboxlayer, ...)
+node = blink_round.add_subcipher(mixcolumn, ...)
+node_key = blink_round.add_subcipher(key_add, ...)
+node = blink_round.add_subcipher(shuffle_perm, ...)
+So the CiVerLy cipher classes have the correct round structure: S -> M -> AK -> P. But the THF_Blink_Encryptor has:
+
+def _round_fwd(self, state, key):
+    return self._apply_perm(int(state) ^ int(self._apply_mix(self._apply_sbox(state))) ^ int(key))
+This is indeed wrong. It should be:
+
+def _round_fwd(self, state, key):
+    return self._apply_perm(int(self._apply_mix(self._apply_sbox(state))) ^ int(key))
+Wait, but actually looking at the CiVerLy code again... the BLINK64_CVL/BLINK128_CVL classes are said to model the round function as P ◦ AK ◦ M ◦ S. So S -> M -> AK -> P.
+
+But in the THF_Blink_Encryptor:
+
+def _round_fwd(self, state, key):
+    return self._apply_perm(int(state) ^ int(self._apply_mix(self._apply_sbox(state))) ^ int(key))
+The int(state) ^ is definitely a bug. It should be just P(M(S(state)) ^ key).
+
+Also looking at the reference decrypt:
+
+for r in range(self.rb):
+    self.inv_permutation(state)
+    self.add_round_constant(state, self.round_const[self.ra + self.rb - r - 1])
+    self.add_round_key(state, rk[self.ra + self.rb - r - 1])
+    self.mix_columns(state)
+    self.sub_bytes(state)
+So inverse round = inv_P -> AC -> AK -> M -> S
+
+In CiVerLy THF_Blink_Encryptor:
+
+def _round_inv(self, state, key):
+    temp = self._apply_perm_inv(state)
+    temp = int(temp) ^ int(key)
+    temp = self._apply_mix(temp)
+    temp = self._apply_sbox(temp)
+    return temp
+This is: inv_P -> AK -> M -> S. Missing the AC!
+
+Also the order of AC and AK in both fwd and inv rounds seems wrong compared to the reference. Wait, actually the order doesn't matter if they're both XOR operations (assuming round constant and key are XORed together). But the reference keeps them as separate operations.
+
+Wait, let me look at the reference encrypt step 7:
+
+for r in range(self.rb):
+    self.inv_permutation(state)
+    self.add_round_constant(state, self.round_const_prime[r])
+    self.add_round_key(state, rk[r])  # Wait, this uses rk[r] not reversed?
+    self.mix_columns(state)
+    self.sub_bytes(state)
+Wait, look at this! The reference uses rk[r] for the inverse rounds, not reversed! And the constants are rc_prime[r].
+
+But in step 2 (forward):
+
+for r in range(self.ra):
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, rk[r])
+    self.add_round_constant(state, self.round_const[r])
+    self.permutation(state)
+So forward rounds use rk[r] for r in 0..ra-1. Then step 3 uses h[0]. Then step 4 uses rk[r+ra] for r in 0..rb-1. Then reflector. Then step 7 uses rk[r] for r in 0..rb-1 (NOT reversed!). Then step 8 uses h[1]. Then step 9 uses rk[r+rb] for r in 0..ra-1 (NOT reversed!). Then step 10 uses w[1].
+
+Wait, but in the reference decrypt:
+
+for r in range(self.ra):
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, rk[self.ra + self.rb - r - 1])
+    self.add_round_constant(state, self.round_const_prime[self.ra + self.rb - r - 1])
+    self.permutation(state)
+So decrypt uses reversed keys and reversed rc_prime!
+
+But encrypt uses rk[r] and rk[r+rb] in the bottom half. That's not reversed! Let me verify...
+
+Actually wait, look at the encrypt function again:
+
+# Top half
+for r in range(self.ra):
+    ...
+    self.add_round_key(state, rk[r])
+    ...
+for r in range(self.rb):
+    ...
+    self.add_round_key(state, rk[r + self.ra])
+
+# Bottom half
+for r in range(self.rb):
+    self.inv_permutation(state)
+    self.add_round_constant(state, self.round_const_prime[r])
+    self.add_round_key(state, rk[r])
+    ...
+self.add_round_key(state, h[1])
+for r in range(self.ra):
+    self.inv_permutation(state)
+    self.add_round_constant(state, self.round_const_prime[r + self.rb])
+    self.add_round_key(state, rk[r + self.rb])
+Hmm, that's indeed rk[r] for bottom rb rounds and rk[r+rb] for bottom ra rounds. Wait, but rk has length ra + rb. So r + rb for r in 0..ra-1 gives indices rb to ra+rb-1.
+
+Wait, rk in the reference has length ra + rb. Let me check:
+
+rk = [[0] * self.state_bytes for _ in range(self.ra + self.rb)]
+And in generate_round_key:
+
+for i in range(self.state_bytes):
+    for j in range(self.ra + self.rb):
+        rk[j][i] = master_key[i + (j + 2) * self.state_bytes]
+So rk[0] comes from bytes 2*state_bytes, rk[1] from 3*state_bytes, etc.
+
+In the top half (encrypt):
+
+Forward rounds 0 to ra-1 use rk[0] to rk[ra-1]
+Forward rounds 0 to rb-1 use rk[ra] to rk[ra+rb-1]
+In the bottom half (encrypt):
+
+Inverse rounds 0 to rb-1 use rk[0] to rk[rb-1]
+Then h[1]
+Inverse rounds 0 to ra-1 use rk[rb] to rk[ra+rb-1]
+So the bottom half uses rk in the SAME order, not reversed! That's because the THF construction is symmetric - the same keys are used on both sides but with inverse permutations and different constants.
+
+But in the CiVerLy THF_Blink_Encryptor:
+
+drk = list(reversed(rk))
+for i in range(self.b):
+    state = self._round_inv(state, int(drk[i]) ^ int(self.rc_prime[i]))
+state = int(state) ^ int(h2)
+for i in range(self.a):
+    state = self._round_inv(state, int(drk[self.b + i]) ^ int(self.rc_prime[self.b + i]))
+It uses reversed keys! That's wrong according to the reference.
+
+Wait, but let me also look at the reference decrypt:
+
+def decrypt(self, state, rk, w, h):
+    self.whitening(state, w[1])
+    for r in range(self.ra):
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, rk[self.ra + self.rb - r - 1])
+        self.add_round_constant(state, self.round_const_prime[self.ra + self.rb - r - 1])
+        self.permutation(state)
+    ...
+    for r in range(self.rb):
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, rk[self.rb - r - 1])
+        self.add_round_constant(state, self.round_const_prime[self.rb - r - 1])
+        self.permutation(state)
+    ...
+So decrypt uses REVERSED keys. But encrypt does NOT use reversed keys in the bottom half. The THF construction has this "reflector" structure where the same keys are used before and after.
+
+Wait, let me re-read the reference encrypt carefully...
+
+    def encrypt(self, state, rk, w, h):
+        self.whitening(state, w[0])
+        for r in range(self.ra):
+            self.sub_bytes(state)
+            self.mix_columns(state)
+            self.add_round_key(state, rk[r])
+            self.add_round_constant(state, self.round_const[r])
+            self.permutation(state)
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, h[0])
+        self.permutation(state)
+        for r in range(self.rb):
+            self.sub_bytes(state)
+            self.mix_columns(state)
+            self.add_round_key(state, rk[r + self.ra])
+            self.add_round_constant(state, self.round_const[r + self.ra])
+            self.permutation(state)
+
+        h_xor = [h[0][i] ^ h[1][i] for i in range(self.state_bytes)]
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, h_xor)
+        self.sub_bytes(state)
+
+        for r in range(self.rb):
+            self.inv_permutation(state)
+            self.add_round_constant(state, self.round_const_prime[r])
+            self.add_round_key(state, rk[r])
+            self.mix_columns(state)
+            self.sub_bytes(state)
+        self.inv_permutation(state)
+        self.add_round_key(state, h[1])
+        self.mix_columns(state)
+        self.sub_bytes(state)
+        for r in range(self.ra):
+            self.inv_permutation(state)
+            self.add_round_constant(state, self.round_const_prime[r + self.rb])
+            self.add_round_key(state, rk[r + self.rb])
+            self.mix_columns(state)
+            self.sub_bytes(state)
+        self.whitening(state, w[1])
+Hmm, this is really important. In encrypt:
+
+Top forward rb rounds: use rk[ra] to rk[ra+rb-1]
+Bottom inverse rb rounds: use rk[0] to rk[rb-1]
+Bottom inverse ra rounds: use rk[rb] to rk[ra+rb-1]
+So the round keys are NOT reversed in the bottom half! The bottom half uses rk[0..rb-1] and rk[rb..ra+rb-1].
+
+This is the Feistel-like structure of THF. The key schedule produces ra + rb round keys, and the bottom half uses them in order rk[0], rk[1], ..., rk[rb-1] for the first b inverse rounds, then rk[rb], ..., rk[ra+rb-1] for the next a inverse rounds.
+
+But wait, in the reference decrypt:
+
+    def decrypt(self, state, rk, w, h):
+        self.whitening(state, w[1])
+        for r in range(self.ra):
+            self.sub_bytes(state)
+            self.mix_columns(state)
+            self.add_round_key(state, rk[self.ra + self.rb - r - 1])
+            self.add_round_constant(state, self.round_const_prime[self.ra + self.rb - r - 1])
+            self.permutation(state)
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, h[1])
+        self.permutation(state)
+        for r in range(self.rb):
+            self.sub_bytes(state)
+            self.mix_columns(state)
+            self.add_round_key(state, rk[self.rb - r - 1])
+            self.add_round_constant(state, self.round_const_prime[self.rb - r - 1])
+            self.permutation(state)
+        ...
+        for r in range(self.rb):
+            self.inv_permutation(state)
+            self.add_round_constant(state, self.round_const[self.ra + self.rb - r - 1])
+            self.add_round_key(state, rk[self.ra + self.rb - r - 1])
+            self.mix_columns(state)
+            self.sub_bytes(state)
+        self.inv_permutation(state)
+        self.add_round_key(state, h[0])
+        self.mix_columns(state)
+        self.sub_bytes(state)
+        for r in range(self.ra):
+            self.inv_permutation(state)
+            self.add_round_constant(state, self.round_const[self.ra - r - 1])
+            self.add_round_key(state, rk[self.ra - r - 1])
+            self.mix_columns(state)
+            self.sub_bytes(state)
+        self.whitening(state, w[0])
+In decrypt, the keys ARE reversed! This makes sense because decrypt reverses the entire structure.
+
+But in encrypt, the bottom half uses rk[0..rb-1] and rk[rb..ra+rb-1], while the top half uses rk[0..ra-1] and rk[ra..ra+rb-1].
+
+Wait, there's overlap! Both top and bottom use some of the same keys. Specifically, for the 64a variant (ra=2, rb=3):
+
+Top fwd: rk[0], rk[1] then rk[2], rk[3], rk[4]
+Bottom inv: rk[0], rk[1], rk[2] then rk[3], rk[4]
+So top uses rk[0..4], bottom uses rk[0..4]. But the constants differ.
+
+For 64a, rk has length 5. Top uses all 5 in order. Bottom uses all 5 in the same order but split differently (first 3 for rb, last 2 for ra).
+
+Wait, that's right! rk has ra + rb elements. Top uses ra for first loop, then rb for second loop. Bottom uses rb for first loop, then ra for second loop. So bottom first loop uses rk[0..rb-1], bottom second loop uses rk[rb..ra+rb-1].
+
+Notice that rk[0..ra-1] appears in both top first loop and bottom second loop, and rk[ra..ra+rb-1] appears in both top second loop and bottom first loop. This is the "reflector" structure.
+
+Now let me look at the CiVerLy blink_key_schedule function:
+
+def blink_key_schedule(k, n, a, b):
+    total_bits = (a + b + 2) * n
+    w1 = k & ((1 << n) - 1)
+    w2 = (k >> n) & ((1 << n) - 1)
+    rks = []
+    for i in range(a + b):
+        rk_val = (k >> (2 * n + i * n)) & ((1 << n) - 1)
+        rks.append(rk_val)
+    rks = rks[::-1]  # now [rk_1, ..., rk_{a+b}]
+    ...
+    return rks, w1, w2, k1, k2
+It reverses the round keys! The comment says "now [rk_1, ..., rk_{a+b}]" but the reversal means rk[0] in the returned list corresponds to the last round key extracted from the master key.
+
+Wait, let me check. The loop extracts:
+
+i=0: bits [2n .. 3n-1] (rk_1 in the paper notation?)
+i=1: bits [3n .. 4n-1]
+...
+i=a+b-1: bits [(a+b+1)n .. (a+b+2)n-1]
+Then rks = rks[::-1] reverses it, so:
+
+rks[0] = bits [(a+b+1)n .. (a+b+2)n-1] (the highest bits)
+rks[a+b-1] = bits [2n .. 3n-1] (the lowest bits)
+In the reference generate_round_key:
+
+for i in range(self.state_bytes):
+    for j in range(self.ra + self.rb):
+        rk[j][i] = master_key[i + (j + 2) * self.state_bytes]
+So rk[j] corresponds to bytes starting at offset (j+2)*state_bytes. So rk[0] is at offset 2*state_bytes, rk[1] at 3*state_bytes, etc. This is in the SAME order as extraction.
+
+So the CiVerLy reversal rks[::-1] makes it opposite to the reference! That's a bug.
+
+Actually wait, let me think about what the THF paper says. The paper says the master key is rk_{a+b} || ... || rk_1 || w2 || w1 with w1 as the LSB. So:
+
+w1 = k[0:n-1] (least significant n bits)
+w2 = k[n:2n-1]
+rk_1 = k[2n:3n-1]
+rk_2 = k[3n:4n-1]
+...
+rk_{a+b} = k[(a+b+1)n:(a+b+2)n-1] (most significant n bits)
+In the CiVerLy code:
+
+w1 = k & ((1 << n) - 1)  # correct, LSB n bits
+w2 = (k >> n) & ((1 << n) - 1)  # correct, next n bits
+for i in range(a + b):
+    rk_val = (k >> (2 * n + i * n)) & ((1 << n) - 1)
+    rks.append(rk_val)
+rks = rks[::-1]  # now [rk_1, ..., rk_{a+b}]
+After the loop:
+
+rks[0] = rk_1 (bits [2n:3n-1])
+rks[1] = rk_2
+...
+rks[a+b-1] = rk_{a+b}
+After reversal rks[::-1]:
+
+rks[0] = rk_{a+b}
+rks[a+b-1] = rk_1
+The comment says "now [rk_1, ..., rk_{a+b}]" but that's wrong! After reversal, it's [rk_{a+b}, ..., rk_1].
+
+And in the reference:
+
+rk[0] = rk_1 (bytes starting at 2*state_bytes)
+rk[a+b-1] = rk_{a+b}
+So the reference does NOT reverse. The CiVerLy code incorrectly reverses the round keys.
+
+Now, in the CiVerLy encrypt:
+
+for i in range(self.a):
+    state = self._round_fwd(state, int(rk[i]) ^ int(self.rc[i]))
+state = int(state) ^ int(h1)
+for i in range(self.b):
+    state = self._round_fwd(state, int(rk[self.a + i]) ^ int(self.rc[self.a + i]))
+Here rk[0] to rk[a-1] are used for the top a rounds, and rk[a] to rk[a+b-1] for the top b rounds.
+
+Then for the bottom:
+
+drk = list(reversed(rk))
+for i in range(self.b):
+    state = self._round_inv(state, int(drk[i]) ^ int(self.rc_prime[i]))
+state = int(state) ^ int(h2)
+for i in range(self.a):
+    state = self._round_inv(state, int(drk[self.b + i]) ^ int(self.rc_prime[self.b + i]))
+With drk = reversed(rk), if rk was [rk_{a+b}, ..., rk_1]:
+
+drk = [rk_1, ..., rk_{a+b}]
+drk[0] to drk[b-1] = rk_1 to rk_b
+drk[b] to drk[a+b-1] = rk_{b+1} to rk_{a+b}
+But the reference encrypt bottom half uses:
+
+rk[0] to rk[rb-1] for the first b inverse rounds
+rk[rb] to rk[ra+rb-1] for the next a inverse rounds
+So if rk in CiVerLy (after incorrect reversal) is [rk_{a+b}, ..., rk_1]:
+
+Top a rounds: rk_{a+b}, ..., rk_{b+1}
+Top b rounds: rk_b, ..., rk_1
+Bottom b rounds (using reversed): rk_1, ..., rk_b
+Bottom a rounds (using reversed): rk_{b+1}, ..., rk_{a+b}
+Hmm, this is actually symmetric in a strange way. If we compare with the reference:
+
+Reference top a: rk_1, ..., rk_a
+Reference top b: rk_{a+1}, ..., rk_{a+b}
+Reference bottom b: rk_1, ..., rk_b
+Reference bottom a: rk_{b+1}, ..., rk_{a+b}
+These are different! In the reference, top a uses rk_1..rk_a and top b uses rk_{a+1}..rk_{a+b}. In CiVerLy (with the reversed rk), top a uses rk_{a+b}..rk_{b+1} and top b uses rk_b..rk_1. The bottom then mirrors this.
+
+So the CiVerLy key schedule reversal causes a mismatch.
+
+Also, the CiVerLy round function is wrong:
+
+def _round_fwd(self, state, key):
+    return self._apply_perm(int(state) ^ int(self._apply_mix(self._apply_sbox(state))) ^ int(key))
+It should be:
+
+def _round_fwd(self, state, key):
+    return self._apply_perm(self._apply_mix(self._apply_sbox(state)) ^ key)
+And _round_inv is missing the round constant and has the wrong order:
+
+def _round_inv(self, state, key):
+    temp = self._apply_perm_inv(state)
+    temp = int(temp) ^ int(key)
+    temp = self._apply_mix(temp)
+    temp = self._apply_sbox(temp)
+    return temp
+Wait, the inverse of S -> M -> AK -> P should be inv_P -> AK -> M -> S (since S and M are involutions). But the reference has inv_P -> AC -> AK -> M -> S. If AC and AK are combined into one key parameter, then it's inv_P -> AK_combined -> M -> S.
+
+But in the reference encrypt bottom half:
+
+self.inv_permutation(state)
+self.add_round_constant(state, self.round_const_prime[r])
+self.add_round_key(state, rk[r])
+self.mix_columns(state)
+self.sub_bytes(state)
+This is inv_P -> AC -> AK -> M -> S. Since AC and AK are both XORs, the order doesn't matter. But in the CiVerLy code, the _round_inv function doesn't include the constant at all! It should.
+
+Actually, looking at how _round_inv is called:
+
+state = self._round_inv(state, int(drk[i]) ^ int(self.rc_prime[i]))
+The constant is XORed into the key! So key parameter already includes rc_prime. That's fine.
+
+But the functional form of _round_inv is:
+
+def _round_inv(self, state, key):
+    temp = self._apply_perm_inv(state)
+    temp = int(temp) ^ int(key)
+    temp = self._apply_mix(temp)
+    temp = self._apply_sbox(temp)
+    return temp
+This is inv_P -> AK -> M -> S. Since AK includes the constant XOR, this matches the reference structure inv_P -> AC -> AK -> M -> S if we think of key = rc ^ rk. But actually the reference does inv_P -> AC -> AK -> M -> S. If AC and AK are both XORs, inv_P -> (AC^AK) -> M -> S is equivalent. But wait, in the reference the forward round is S -> M -> AK -> AC -> P. The inverse would be inv_P -> AC -> AK -> M -> S. Since M is an involution (M = M^{-1}) and S is an involution (S = S^{-1}), this is correct.
+
+So _round_inv as inv_P -> AK -> M -> S where AK already includes AC is correct.
+
+But _round_fwd has the bug with state ^. It should be:
+
+def _round_fwd(self, state, key):
+    return self._apply_perm(self._apply_mix(self._apply_sbox(state)) ^ key)
+Now let me think about the constants. The reference ROUND_CONST_64 is:
+
+ROUND_CONST_64 = [
+    [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13],
+    ...
+]
+Wait, the first constant row is [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13]. When read as a little-endian integer (since the reference processes bytes in reversed order), or big-endian?
+
+Looking at hex(rc[0]) in the CiVerLy code:
+
+sage: hex(rc[0])
+'0x13198a2e03707344'
+And 0x13198a2e03707344 as bytes big-endian is [0x13, 0x19, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x44].
+
+But ROUND_CONST_64[0] in the reference is [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13].
+
+If we reverse the reference bytes: [0x13, 0x19, 0x8a, 0x2e, 0x03, 0x70, 0x73, 0x44], that matches the CiVerLy integer 0x13198a2e03707344 when read as big-endian!
+
+But the reference processes the state in reversed byte order (LSB first):
+
+state = list(reversed(list(plaintext)))
+So state[0] is the least significant byte of the plaintext. The constant is applied as:
+
+self.add_round_constant(state, self.round_const[r])
+Which XORs round_const[r][i] with state[i]. So state[0] (LSB) is XORed with round_const[r][0] (0x44 for rc[0]). This means the LSB gets XORed with 0x44.
+
+In the CiVerLy code, rc[0] = 0x13198a2e03707344. If we XOR this as a 64-bit integer with the state (which is also an integer), the least significant byte gets XORed with 0x44. So the byte-level effect is the same.
+
+So the CiVerLy constants are correct, just represented as integers instead of byte lists.
+
+Now, the hash function. The reference hash_func:
+
+def hash_func(self, key, t, h):
+    for i in range(self.state_bytes - 1, -1, -1):
+        h[self.state_bytes - 1 - i] = 0
+        for l in range(8):
+            temp = [0] * self.tweak_bytes
+            for j in range(self.tweak_bytes):
+                left = (key[self.tweak_bytes + i - j] << l) & 0xFF
+                right = (key[self.tweak_bytes + i - j - 1] >> (8 - l)) & 0xFF
+                temp[self.tweak_bytes - 1 - j] = left ^ right
+            p = 0
+            for j in range(self.tweak_bytes):
+                p ^= (t[j] & temp[j])
+                p &= 0xFF
+            h[self.state_bytes - 1 - i] ^= (HW2[p] << l)
+            h[self.state_bytes - 1 - i] &= 0xFF
+This is a byte-level implementation of a Toeplitz hash. The CiVerLy blink_toeplitz_hash:
+
+def blink_toeplitz_hash(k_hash, t, n, tau):
+    result = 0
+    mask_n = (1 << n) - 1
+    for j in range(tau):
+        if (t >> j) & 1:
+            result = int(result) ^ int((k_hash >> j) & mask_n)
+    return result
+This is a straightforward bit-level Toeplitz hash. The reference does the same thing but with bytes and a HW2 lookup table for efficiency.
+
+But wait, the reference generate_round_key has a specific way of generating hk[0] and hk[1] from key_prime:
+
+hk_len = self.state_bytes + self.tweak_bytes
+hk = [[0] * hk_len for _ in range(2)]
+for i in range(hk_len - 1, -1, -1):
+    if i > 0:
+        hk[0][i] = ((key_prime[i] << 1) ^ (key_prime[i - 1] >> 7)) & 0xFF
+        val = (key_prime[i + hk_len] << 2) & 0xFF
+        val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+        hk[1][i] = (val ^ val2) & 0xFF
+    else:
+        hk[0][i] = (key_prime[i] << 1) & 0xFF
+        val = (key_prime[i + hk_len] << 2) & 0xFF
+        val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+        hk[1][i] = ((val ^ val2) & 0xFE) & 0xFF
+This generates hash keys by shifting key_prime. hk[0] is derived from key_prime by left-shifting by 1 bit, and hk[1] by left-shifting by 2 bits.
+
+In CiVerLy:
+
+k1_len = n + tau - 1
+k2_len = n + tau - 1
+k1 = k_prime & ((1 << k1_len) - 1)
+k2 = (k_prime >> k1_len) & ((1 << k2_len) - 1)
+This just takes the lower n+tau-1 bits as k1 and the next n+tau-1 bits as k2.
+
+The reference computes hash keys differently! It uses shifted versions of key_prime. Specifically, hk[0] is key_prime shifted left by 1 bit (with bytes), and hk[1] is key_prime shifted left by 2 bits. And then
+
+The reference tests all pass. Now I need to thoroughly understand the differences and fix the CiVerLy implementation.
+
+Let me create a detailed todo list and then work through the fixes systematically.
+
+Key issues I've identified:
+
+THF_Blink_Encryptor._round_fwd has an erroneous state ^ in the formula. It computes P(state ^ M(S(state)) ^ key) instead of P(M(S(state)) ^ key).
+THF_Blink_Encryptor._round_inv has a similar issue but more importantly, the order of operations in the bottom half doesn't match the reference. Wait, let me re-check.
+The key schedule blink_key_schedule reverses the round keys (rks[::-1]), which is incorrect compared to the reference.
+The hash key generation blink_key_schedule simply extracts k1 and k2 as bit slices of k_prime, but the reference generates them by shifting key_prime by 1 and 2 bits respectively.
+The encrypt method in THF_Blink_Encryptor uses reversed keys in the bottom half (drk = list(reversed(rk))), but the reference encrypt uses the SAME keys (not reversed) in the bottom half.
+The round constants in THF_Blink_Encryptor might be wrong or in the wrong order. The reference has ROUND_CONST_PRIME_64 where row 0 is [0x58, 0xb6, 0x8e, 0x72, ...] which corresponds to integer 0x0d95748f728eb658 (from LSB to MSB). In CiVerLy, rc_prime[0] = 0xd71577c1bd314b27. Wait, that doesn't match!
+Wait, let me verify. In CiVerLy:
+
+rc_prime = [
+    0xd71577c1bd314b27,
+    0x8e79dcb0603a180e,
+    0xc5d1b023286085f0,
+    0x7b54a41dc25a59b5,
+    0x0d95748f728eb658,
+]
+Reference ROUND_CONST_PRIME_64:
+
+[
+    [0x58, 0xb6, 0x8e, 0x72, 0x8f, 0x74, 0x95, 0x0d],  # rc_prime[0] -> 0x0d95748f728eb658 (LE)
+    [0xb5, 0x59, 0x5a, 0xc2, 0x1d, 0xa4, 0x54, 0x7b],  # -> 0x7b54a41dc25a59b5
+    [0xf0, 0x85, 0x60, 0x28, 0x23, 0xb0, 0xd1, 0xc5],  # -> 0xc5d1b023286085f0
+    [0x0e, 0x18, 0x3a, 0x60, 0xb0, 0xdc, 0x79, 0x8e],  # -> 0x8e79dcb0603a180e
+    [0x27, 0x4b, 0x31, 0xbd, 0xc1, 0x77, 0x15, 0xd7],  # -> 0xd71577c1bd314b27
+]
+So the CiVerLy rc_prime list is REVERSED compared to the reference!
+
+CiVerLy rc_prime[0] = 0xd71577c1bd314b27, which corresponds to reference row 4 (last row)
+CiVerLy rc_prime[4] = 0x0d95748f728eb658, which corresponds to reference row 0 (first row)
+Similarly for rc: Reference ROUND_CONST_64:
+
+[
+    [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13],  # -> 0x13198a2e03707344
+    [0x89, 0x6c, 0x4e, 0xec, 0x98, 0xfa, 0x2e, 0x08],  # -> 0x082efa98ec4e6c89
+    [0x6c, 0x0c, 0xe9, 0x34, 0xcf, 0x66, 0x54, 0xbe],  # -> 0xbe5466cf34e90c6c
+    [0x17, 0x09, 0x47, 0xb5, 0xb5, 0xd5, 0x84, 0x3f],  # -> 0x3f84d5b5b5470917
+    [0xac, 0xb5, 0xdf, 0x98, 0xa6, 0x0b, 0x31, 0xd1],  # -> 0xd1310ba698dfb5ac
+]
+CiVerLy rc:
+
+rc = [
+    0x13198a2e03707344,  # matches reference row 0
+    0x082efa98ec4e6c89,  # matches reference row 1
+    0xbe5466cf34e90c6c,  # matches reference row 2
+    0x3f84d5b5b5470917,  # matches reference row 3
+    0xd1310ba698dfb5ac,  # matches reference row 4
+]
+So rc is in the correct order (same as reference), but rc_prime is reversed!
+
+Wait, in the reference encrypt, the top half uses round_const[r] for r in 0..ra-1 and r in 0..rb-1 (with offset ra). The bottom half uses round_const_prime[r] for r in 0..rb-1 and round_const_prime[r+rb] for r in 0..ra-1.
+
+So the bottom half uses rc_prime in the SAME order as the top half uses rc, just without overlap. For 64a (ra=2, rb=3):
+
+Top: rc[0], rc[1] then rc[2], rc[3], rc[4]
+Bottom: rc_prime[0], rc_prime[1], rc_prime[2] then rc_prime[3], rc_prime[4]
+Wait, but in the reference, ROUND_CONST_64 has 5 rows, and ROUND_CONST_PRIME_64 has 5 rows. For 64a (ra=2, rb=3):
+
+Top a=2: rc[0], rc[1]
+Top b=3: rc[2], rc[3], rc[4]
+Bottom b=3: rc_prime[0], rc_prime[1], rc_prime[2]
+Bottom a=2: rc_prime[3], rc_prime[4]
+So rc_prime is used in the SAME index order as rc.
+
+But CiVerLy has rc_prime reversed! That would mean:
+
+CiVerLy bottom b=3: rc_prime[0]=ref[4], rc_prime[1]=ref[3], rc_prime[2]=ref[2]
+CiVerLy bottom a=2: rc_prime[3]=ref[1], rc_prime[4]=ref[0]
+This doesn't match the reference.
+
+Also, the rc_prime for 128-bit in CiVerLy:
+
+rc_prime = [
+    0x6f0a116499d719efa34c2a9bf67f2880,
+    0x31d26b73a758f4e2f21d6dd6e838acf3,
+    ...
+]
+Reference ROUND_CONST_PRIME_128a:
+
+[
+    [0x58, 0xb6, 0x8e, ...],   # -> 0x...a4
+    [0xb5, 0x59, ...],         # -> 0x...71
+    ...
+]
+Wait, I need to check the 128-bit constants too. CiVerLy rc_prime[0] = 0x6f0a116499d719efa34c2a9bf67f2880. Let me convert the reference ROUND_CONST_PRIME_128a[0] to an integer:
+
+[0x58, 0xb6, 0x8e, 0x72, 0x8f, 0x74, 0x95, 0x0d, 0x7e, 0x3d, 0x93, 0xf4, 0xa3, 0xfe, 0x58, 0xa4]
+As little-endian: 0xa458fea3f4933d7e0d95748f728eb658
+
+But CiVerLy rc_prime[0] = 0x6f0a116499d719efa34c2a9bf67f2880. That doesn't match at all!
+
+Let me check ROUND_CONST_PRIME_128A (with capital A):
+
+[0x58, 0xb6, 0x8e, 0x72, 0x8f, 0x74, 0x95, 0x0d, 0x7e, 0x3d, 0x93, 0xf4, 0xa3, 0xfe, 0x58, 0xa4]
+Same as above!
+
+Wait, what about CiVerLy rc for 128?
+
+rc[0] = 0xed33b83d137b6e8c1fccdd90f09a7efc
+Reference ROUND_CONST_128a[0]:
+
+[0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24]
+As little-endian: 0x243f6a8885a308d313198a2e03707344
+
+That doesn't match 0xed33... either!
+
+Wait, what about ROUND_CONST_128A[0]:
+
+[0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24]
+Same as 128a.
+
+What about CiVerLy 128 rc? 0xed33b83d137b6e8c1fccdd90f09a7efc. Let me reverse the bytes: fc7e9af090ddcc1f8c6e7b133db833ed. Hmm, that's not [0x44, ...] either.
+
+Wait, maybe I'm looking at the wrong thing. Let me check the 128A test vector more carefully.
+
+Actually, the CiVerLy docstring says:
+
+sage: hex(rc[0])
+'0xed33b83d137b6e8c1fccdd90f09a7efc'
+Maybe these are different constants from a different version of the paper? But the CiVerLy code says "Appendix D of the Blink specification (THF paper)".
+
+Let me look at what the reference test vectors use. The reference Blink_128A uses ROUND_CONST_128A and ROUND_CONST_PRIME_128A. The test vectors pass.
+
+The CiVerLy constants for 128-bit don't match the reference at all. Let me double-check:
+
+Reference ROUND_CONST_128A[0] bytes (LE integer = 0x243f6a8885a308d313198a2e03707344): 0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24
+
+CiVerLy rc[0] = 0xed33b83d137b6e8c1fccdd90f09a7efc As bytes LE: 0xfc, 0x7e, 0x9a, 0xf0, 0x90, 0xdd, 0xcc, 0x1f, 0x8c, 0x6e, 0x7b, 0x13, 0x3d, 0xb8, 0x33, 0xed
+
+Not matching at all.
+
+Wait, maybe the 128-bit constants in CiVerLy are for a different parameter set. Let me think... Actually, looking at the CiVerLy constants for 128, they seem to be a different set entirely.
+
+But more importantly, the 64-bit constants: CiVerLy rc[0] = 0x13198a2e03707344 As bytes LE: 0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13 This matches reference ROUND_CONST_64[0]!
+
+CiVerLy rc_prime[0] = 0xd71577c1bd314b27 As bytes LE: 0x27, 0x4b, 0x31, 0xbd, 0xc1, 0x77, 0x15, 0xd7 This matches reference ROUND_CONST_PRIME_64[4] (the last row).
+
+So CiVerLy rc_prime for 64 is reversed. But what about 128? Let me check if there's any match.
+
+CiVerLy rc[0] for 128 = 0xed33b83d137b6e8c1fccdd90f09a7efc I don't see a match in the reference constants.
+
+Wait, what if I look at ROUND_CONST_128a vs ROUND_CONST_128A? ROUND_CONST_128a = 6 rows ROUND_CONST_128A = 8 rows
+
+CiVerLy 128 rc has 8 elements. Let me compare: Reference ROUND_CONST_128A[0] (LE): 0x243f6a8885a308d313198a2e03707344 CiVerLy rc[7] = 0x6f0a116499d719efa34c2a9bf67f2880 Not matching.
+
+Hmm, the 128-bit constants in CiVerLy seem completely wrong or from a different source. Let me check if maybe they match some other rows when reversed...
+
+Actually, let me just focus on making the CiVerLy implementation work with the reference. I should:
+
+Fix the THF_Blink_Encryptor to use the same structure as the reference
+Make sure the constants match the reference
+Fix the key schedule
+Fix the hash key generation
+Fix the round functions
+Actually, I think the best approach is to rewrite THF_Blink_Encryptor and related functions to closely follow the reference implementation, while keeping the BLINK64_CVL and BLINK128_CVL classes intact (since those are for the round function modeling in CiVerLy's framework).
+
+Wait, let me reconsider. The user said "Please use it to correct the current CiVerLy implementation of this cipher". The CiVerLy implementation has two parts:
+
+BLINK64_CVL / BLINK128_CVL - These are CiVerLy cipher objects that model the round function
+THF_Blink_Encryptor - A standalone encryptor for the full THF mode
+The BLINK64_CVL / BLINK128_CVL classes have docstring tests that pass (like the Blink-64a and Blink-128a round-key tests). Those should be kept. The issue is with THF_Blink_Encryptor which doesn't match the test vectors.
+
+Actually, hold on. Let me re-read the docstring tests for BLINK64_CVL:
+
+sage: rks_64a = [0xd6a102d888a467e4, 0xd1d7dec33a246943, 0xe07c1dc6f302c57e, 0x762c2df9de6f0d21, 0x6dd387874a0b52ce, 0x3022e0ad78c78a06, 0x97779021b38e7fa1]
+sage: blink64 = BLINK64_CVL(R=6, rks=rks_64a)
+sage: result = vec_to_int(blink64(int_to_vec(0x0, 64)))
+sage: result == 0xe04d07b55f205fa5
+True
+This uses R=6 with 7 round keys (rks_64a has 7 elements). The result is 0xe04d07b55f205fa5. This is different from the test vector 0xa4a0d10502be846e for the full THF mode. That's because BLINK64_CVL only implements the iterated SPN, not the full THF mode with tweak hashing, whitening, etc.
+
+The user wants the CiVerLy implementation corrected. I think the main thing to fix is the THF_Blink_Encryptor to match the reference test vectors, and possibly update the constants, key schedule, etc.
+
+Let me also verify what the THF_Blink_Encryptor currently produces for the test vectors. Let me write a quick test script.
+
+Actually, let me plan this out carefully. I'll write a test script to see what the current CiVerLy implementation produces, then fix the issues.
+
+Key fixes needed in THF_Blink_Encryptor:
+
+Fix _round_fwd: remove the erroneous state ^
+Fix key schedule: don't reverse round keys
+Fix encrypt: don't reverse round keys in bottom half
+Fix round constants: use the correct constants from the reference, in the correct order
+Fix hash key generation: generate by shifting k_prime, not by bit slicing
+Wait, but the CiVerLy blink_key_schedule is also used by the THF encryptor. And blink_toeplitz_hash is a bit-level version of the byte-level hash. These need to match the reference.
+
+Actually, looking more carefully at the reference hash:
+
+def hash_func(self, key, t, h):
+    for i in range(self.state_bytes - 1, -1, -1):
+        h[self.state_bytes - 1 - i] = 0
+        for l in range(8):
+            temp = [0] * self.tweak_bytes
+            for j in range(self.tweak_bytes):
+                left = (key[self.tweak_bytes + i - j] << l) & 0xFF
+                right = (key[self.tweak_bytes + i - j - 1] >> (8 - l)) & 0xFF
+                temp[self.tweak_bytes - 1 - j] = left ^ right
+            p = 0
+            for j in range(self.tweak_bytes):
+                p ^= (t[j] & temp[j])
+                p &= 0xFF
+            h[self.state_bytes - 1 - i] ^= (HW2[p] << l)
+            h[self.state_bytes - 1 - i] &= 0xFF
+This is computing a Toeplitz hash. The key length is state_bytes + tweak_bytes. For each bit position l in byte i, it computes a dot product of t with a shifted version of the key, then uses HW2 to get the parity.
+
+Actually, HW2[p] is just the parity of p (number of 1 bits mod 2). For 8-bit p, HW2[p] gives the parity. So the hash is: h[i] = sum over l of (parity(t & shifted_key_l) << l)
+
+This is equivalent to the standard Toeplitz hash where h = T * t with T being a Toeplitz matrix formed from the key.
+
+In the CiVerLy blink_toeplitz_hash:
+
+def blink_toeplitz_hash(k_hash, t, n, tau):
+    result = 0
+    mask_n = (1 << n) - 1
+    for j in range(tau):
+        if (t >> j) & 1:
+            result = int(result) ^ int((k_hash >> j) & mask_n)
+    return result
+This computes: result = XOR over j of (k_hash[j:j+n-1] if t_j = 1). This is indeed a Toeplitz hash. The k_hash should have length n + tau - 1 bits.
+
+In the reference, hk[0] and hk[1] are generated from key_prime with specific shifts:
+
+hk[0][i] = (key_prime[i] << 1) ^ (key_prime[i-1] >> 7) for i > 0
+hk[0][0] = key_prime[0] << 1
+This is a left shift by 1 bit of key_prime, producing hk_len = state_bytes + tweak_bytes bytes from key_prime.
+
+Then hk[1] is a left shift by 2 bits (with some special handling at the boundary). So hk[1] is key_prime shifted left by 2 bits.
+
+If key_prime has key_bytes bytes, and hk_len = state_bytes + tweak_bytes, then hk[0] and hk[1] are derived from the first hk_len bits of key_prime (shifted) and then some bits from beyond.
+
+Wait, in generate_round_key:
+
+hk_len = self.state_bytes + self.tweak_bytes
+hk = [[0] * hk_len for _ in range(2)]
+for i in range(hk_len - 1, -1, -1):
+    if i > 0:
+        hk[0][i] = ((key_prime[i] << 1) ^ (key_prime[i - 1] >> 7)) & 0xFF
+        val = (key_prime[i + hk_len] << 2) & 0xFF
+        val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+        hk[1][i] = (val ^ val2) & 0xFF
+    else:
+        hk[0][i] = (key_prime[i] << 1) & 0xFF
+        val = (key_prime[i + hk_len] << 2) & 0xFF
+        val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+        hk[1][i] = ((val ^ val2) & 0xFE) & 0xFF
+Wait, key_prime[i + hk_len] accesses bytes beyond hk_len! For hk_len = state_bytes + tweak_bytes, key_prime has key_bytes bytes. So for 64a: hk_len = 8 + 8 = 16, key_bytes = 56. So i + hk_len goes up to 15 + 16 = 31, which is within key_bytes = 56.
+
+For 128a: hk_len = 16 + 16 = 32, key_bytes = 128. i + hk_len goes up to 31 + 32 = 63, within 128.
+
+For 128A: hk_len = 16 + 16 = 32, key_bytes = 160. i + hk_len goes up to 31 + 32 = 63, within 160.
+
+So hk[0] is derived from key_prime[0..hk_len-1] shifted left by 1 bit. hk[1] is derived from key_prime[hk_len..2*hk_len-1] shifted left by 2 bits, combined with key_prime[hk_len-1] (or rather key_prime[2*hk_len-1]?) Wait, the formula is: val = key_prime[i + hk_len] << 2 val2 = key_prime[i + hk_len - 1] >> 6 hk[1][i] = val ^ val2
+
+For i > 0. And for i = 0: hk[1][0] = (val ^ val2) & 0xFE
+
+This means hk[1] is formed by taking bytes key_prime[hk_len .. 2*hk_len - 1], shifting each left by 2, and ORing in the top 2 bits from the previous byte (key_prime[i+hk_len-1] shifted right by 6). This is exactly a left shift by 2 bits of the byte string key_prime[hk_len-1 .. 2*hk_len - 1].
+
+Wait, for i=0: val = key_prime[hk_len] << 2 val2 = key_prime[hk_len - 1] >> 6 hk[1][0] = (val ^ val2) & 0xFE
+
+So the LSB bit of hk[1][0] is forced to 0 (& 0xFE). This is because the shift by 2 bits loses the 2 LSB bits, and the reference chooses to zero-pad at the end.
+
+And for hk[0]: For i > 0: hk[0][i] = (key_prime[i] << 1) ^ (key_prime[i-1] >> 7) For i = 0: hk[0][0] = key_prime[0] << 1
+
+So hk[0] is key_prime[0..hk_len-1] shifted left by 1 bit, with hk[0][0]'s LSB set to 0 (since key_prime[0] << 1 has LSB 0).
+
+This is a specific way to generate the hash keys. The CiVerLy blink_key_schedule just takes k_prime & ((1 << k1_len) - 1) and (k_prime >> k1_len) & ((1 << k2_len) - 1). This is equivalent to taking the first k1_len bits as k1 and the next k2_len bits as k2. But the reference shifts the bits left by 1 and 2 respectively!
+
+This is a major difference. The reference doesn't directly use key_prime bits as the hash key; it shifts them first.
+
+Let me also look at how k_prime is generated in the reference:
+
+key_prime = [0] * self.key_bytes
+for i in range(self.key_bytes):
+    for j in range(8):
+        bit_index = (11 * (8 * i + j)) % (self.key_bytes * 8)
+        byte_idx = bit_index // 8
+        bit_in_byte = bit_index % 8
+        bit_val = (master_key[byte_idx] >> bit_in_byte) & 1
+        key_prime[i] ^= (bit_val << j)
+        key_prime[i] &= 0xFF
+This generates key_prime by taking the master key and permuting its bits according to bit_index = (11 * idx) % (key_bytes * 8). But j iterates from 0 to 7, so it sets bit j of key_prime[i] from bit bit_in_byte of master_key[byte_idx].
+
+Wait, this is a bit confusing. Let me think... For each bit position b = 8*i + j in key_prime, the source bit is at position (11 * b) % total_bits in the master key. And key_prime[i] is built with bit_val << j, which sets bit j. So this is: key_prime[b] = master_key[(11*b) % total_bits]
+
+In the CiVerLy blink_k_prime:
+
+k_prime = 0
+for i in range(total_bits):
+    src_idx = (11 * i) % total_bits
+    if (k >> src_idx) & 1:
+        k_prime |= (1 << i)
+This sets bit i of k_prime from bit src_idx = (11*i) % total_bits of k. So: k_prime[i] = k[(11*i) % total_bits]
+
+Wait, that's the same! The reference also computes key_prime[b] = master_key[(11*b) % total_bits]. Let me check:
+
+bit_index = (11 * (8*i + j)) % total_bits
+bit_val = (master_key[bit_index // 8] >> (bit_index % 8)) & 1
+key_prime[i] ^= (bit_val << j)
+So bit j of key_prime[i] (which is bit 8*i + j) comes from bit bit_index of master_key, where bit_index = (11 * (8*i + j)) % total_bits. So: key_prime[pos] = master_key[(11 * pos) % total_bits]
+
+And CiVerLy: k_prime[i] = k[(11 * i) % total_bits]
+
+Same! Good.
+
+Now the difference is in how hk is derived from key_prime. CiVerLy just bit-slices, but the reference shifts left by 1 and 2 bits.
+
+Let me verify with the 64a test vector. Key length = 56 bytes = 448 bits. hk_len = 8 + 8 = 16 bytes = 128 bits.
+
+The reference hk[0] is key_prime[0..15] shifted left by 1 bit. As a 128-bit integer, this is (key_prime_int[0:128] << 1) & ((1<<128)-1).
+
+hk[1] is derived from key_prime[15..31] shifted left by 2 bits, with the LSB bit forced to 0 at position 0. Wait, key_prime[15] is included. For i=0: hk[1][0] = ((key_prime[16] << 2) ^ (key_prime[15] >> 6)) & 0xFE. So key_prime[15] contributes the top 2 bits to hk[1][0]. For i=1: hk[1][1] = (key_prime[17] << 2) ^ (key_prime[16] >> 6).
+
+So the bytes used are effectively key_prime[15..31], shifted left by 2. In terms of bits: it's the bits from position 15*8 = 120 to 31*8 + 7 = 255 (i.e., 136 bits), shifted left by 2, producing 136 bits, but only the first 128 bits are kept in hk[1] (since it has 16 bytes).
+
+Actually, hk_len = 16, and hk[1] has 16 bytes. The maximum bit position accessed is key_prime[31]. For key_bytes = 56, this is valid.
+
+In CiVerLy, k1_len = n + tau - 1 = 64 + 64 - 1 = 127 bits. k2_len = 127 bits. k1 = k_prime & ((1 << 127) - 1) - lower 127 bits k2 = (k_prime >> 127) & ((1 << 127) - 1) - next 127 bits
+
+But the reference hk[0] has 128 bits (16 bytes), not 127! And it's shifted left by 1.
+
+Hmm, and hk[1] also has 128 bits.
+
+Wait, the Toeplitz hash matrix is n x tau. For n=64, tau=64, the matrix has n + tau - 1 = 127 independent bits. But the reference hk[0] has 128 bits (16 bytes). The hash function only uses rows of this matrix. Let me understand...
+
+In the reference hash_func, for each output byte i (0 to state_bytes-1) and each bit l (0 to 7): temp[j] = (key[tweak_bytes + i - j] << l) ^ (key[tweak_bytes + i - j - 1] >> (8-l))
+
+The key length is state_bytes + tweak_bytes = 16. The indices accessed are tweak_bytes + i - j for j in 0..tweak_bytes-1. For i=0 (last output byte in the loop, but first in h array): 16 + 0 - j = 16 - j. j goes 0..7 (for tweak_bytes=8). So indices 16, 15, 14, ..., 9. And also 16 + 0 - j - 1 = 15 - j, so indices 15, 14, ..., 8.
+
+For i=7 (first iteration): 16 + 7 - j = 23 - j, j=0..7, so indices 23, 22, ..., 16. And 22 - j = 22, 21, ..., 15.
+
+So the maximum index accessed is 23. But hk only has 16 elements (0..15). Hmm, that can't be right. Let me re-read.
+
+Wait, key parameter to hash_func has length self.state_bytes + self.tweak_bytes = hk_len. So indices 0..15.
+
+For i=7, j=0: key[8 + 7 - 0] = key[15]. j=7: key[8 + 7 - 7] = key[8]. And key[8 + 7 - 0 - 1] = key[14]. j=7: key[8 + 7 - 7 - 1] = key[7].
+
+For i=0, j=0: key[8 + 0 - 0] = key[8]. j=7: key[8 + 0 - 7] = key[1]. And key[8 + 0 - 0 - 1] = key[7]. j=7: key[8 + 0 - 7 - 1] = key[0].
+
+So for i=0: accesses key[8], key[7], key[1], key[0]. For i=7: accesses key[15], key[14], key[8], key[7].
+
+The range of key indices accessed is 0 to 15, which matches the length of hk. Good.
+
+But wait, for i=0 and j=0..7: key[8 + 0 - j] gives key[8], key[7], key[6], key[5], key[4], key[3], key[2], key[1]. key[8 + 0 - j - 1] gives key[7], key[6], key[5], key[4], key[3], key[2], key[1], key[0].
+
+So temp[7 - j] = (key[8-j] << l) ^ (key[7-j] >> (8-l)).
+
+For j=7: temp[0] = (key[1] << l) ^ (key[0] >> (8-l)). For j=
+
+... (reasoning about differences in the hash function)
+
+... (wrong round constants are now fixed)
+
+Wait, some of these values don't look right. Let me compare with the current CiVerLy values more carefully.
+
+Current CiVerLy rc[0] = 0x13198a2e03707344. Matches my computed rc_64[0]! Good. Current CiVerLy rc[4] = 0xd1310ba698dfb5ac. Matches my computed rc_64[4]! Good.
+
+Current CiVerLy rc_prime[0] = 0xd71577c1bd314b27. This is the LAST element of my computed rc_prime_64. The first element should be 0x0d95748f728eb658.
+
+Now let me check the 128-bit constants.
+
+Current CiVerLy rc for 128:
+
+rc = [
+    0xed33b83d137b6e8c1fccdd90f09a7efc,
+    0x1059b6a5600dde58a728a267dc0b2b5d,
+    0x8bf37fa68a590051bb7feb3f0b07640a,
+    0x13983d6dc133c57b5a3109f7c0c42df1,
+    0xb9f0c0c48798e4b620d916e380724a8b,
+    0xe4ae954e52db9b008913103695722f92,
+    0x31d26b73a758f4e2f21d6dd6e838acf3,
+    0x6f0a116499d719efa34c2a9bf67f2880,
+]
+My computed rc_128A:
+
+0x243f6a8885a308d313198a2e03707344,
+0xa4093822299f31d0082efa98ec4e6c89,
+0x452821e638d01377be5466cf34e90c6c,
+0xc0ac29b7c97c50dd3f84d5b5b5470917,
+0x9216d5d98979fb1bd1310ba698dfb5ac,
+0x2ffd72dbd01adfb7b8e1afed6a267e96,
+0xba7c9045f12c7f9924a19947b3916cf7,
+0x0801f2e2858efc16636920d871574e69,
+None of these match the current CiVerLy 128-bit rc values. So the current CiVerLy 128-bit round constants are definitely wrong.
+
+My computed rc_prime_128A:
+
+0xa458fea3f4933d7e0d95748f728eb658,
+0x718bcd5882154aee7b54a41dc25a59b5,
+0x9c30d5392af26013c5d1b023286085f0,
+0xca417918b8db38ef8e79dcb0603a180e,
+0x6c9e0e8bb01e8a3ed71577c1bd314b27,
+0x78af2fda55605c60e65525f3aa55ab94,
+0x5748986263e8144055ca396a2aab10b6,
+0xb4cc5c341141e8cea15486af7c72e993,
+None of these match the current CiVerLy rc_prime values either.
+
+Wait, the current CiVerLy rc_prime for 128 is completely reversed from rc:
+
+rc_prime = [
+    0x6f0a116499d719efa34c2a9bf67f2880,  # matches rc[7]
+    0x31d26b73a758f4e2f21d6dd6e838acf3,  # matches rc[6]
+    ...
+]
+So someone reversed rc_prime as a copy of rc in reverse order! That's definitely wrong.
+
+Now wait, looking at the 128a constants: the first 6 rows of ROUND_CONST_128A match ROUND_CONST_128a. And ROUND_CONST_128a is what the reference uses for 128a and 128b. But my computed rc_128A values don't even match the current CiVerLy values.
+
+Actually, wait. Let me double-check by running the reference directly and getting the integer constants another way. Maybe the byte order in my computation is backwards again.
+
+Actually, in the reference encrypt_bytes:
+
+state = list(reversed(list(plaintext)))
+t = list(reversed(list(tweak)))
+master_key = list(reversed(list(key)))
+So for plaintext 0x0123456789abcdef (8 bytes), state becomes [0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01].
+
+Then ROUND_CONST_64[0] = [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13].
+
+When add_round_constant(state, ROUND_CONST_64[0]) is called:
+
+for i in range(self.state_bytes):
+    state[i] ^= constant[i]
+So state[0] (0xef) is XORed with constant[0] (0x44) -> 0xef ^ 0x44 = 0xab.
+
+If we converted the state back to an integer after whitening, the LSB byte would be 0xef ^ 0x44 = 0xab. So the integer would have 0xab in the LSB position.
+
+In the CiVerLy integer model, the state is an integer, and XORing with 0x13198a2e03707344 would affect the LSB byte as 0xef ^ 0x44 = 0xab. So the integer constant 0x13198a2e03707344 is correct because 0x44 is the LSB byte.
+
+Now for the 128-bit constants. Reference ROUND_CONST_128a[0]: [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24]
+
+The integer should be 0x243f6a8885a308d313198a2e03707344. Let me check: LSB is 0x44, next is 0x73, ..., MSB is 0x24. Yes, 0x243f...07344.
+
+My computed rc_128A[0] = 0x243f6a8885a308d313198a2e03707344. This is correct.
+
+But the current CiVerLy rc[0] = 0xed33b83d137b6e8c1fccdd90f09a7efc. This is completely different. Where did this come from?
+
+Maybe it's from a different version of the paper or a different parameter set. But regardless, the reference implementation uses the constants I computed, and the test vectors pass with those constants.
+
+So I need to replace the 128-bit constants in CiVerLy with the correct ones.
+
+Now let me also verify my rc_prime values. Reference ROUND_CONST_PRIME_128A[0]: [0x58, 0xb6, 0x8e, 0x72, 0x8f, 0x74, 0x95, 0x0d, 0x7e, 0x3d, 0x93, 0xf4, 0xa3, 0xfe, 0x58, 0xa4]
+
+Integer = 0xa458fea3f4933d7e0d95748f728eb658. My computed value matches.
+
+So the constant fixes are:
+
+blink_round_constants_64: reverse rc_prime to match reference order
+blink_round_constants_128: replace with correct constants from reference
+Now let me think about the THF_Blink_Encryptor.
+
+Currently _round_fwd has a bug:
+
+return self._apply_perm(int(state) ^ int(self._apply_mix(self._apply_sbox(state))) ^ int(key))
+This should be:
+
+return self._apply_perm(self._apply_mix(self._apply_sbox(state)) ^ key)
+Wait, let me verify with the reference encrypt. Reference forward round = S -> M -> AK -> AC -> P. The XORs are commutative, so AK and AC can be combined into a single XOR. The constant is already XORed with the key in the encrypt call.
+
+So _round_fwd(state, combined_key) should be P(M(S(state)) ^ combined_key).
+
+And _round_inv(state, combined_key) should be S(M(inv_P(state) ^ combined_key)).
+
+But wait, in the reference:
+
+for r in range(self.ra):
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, rk[r])
+    self.add_round_constant(state, self.round_const[r])
+    self.permutation(state)
+This is S -> M -> AK -> AC -> P. The inverse is:
+
+for r in range(self.rb):
+    self.inv_permutation(state)
+    self.add_round_constant(state, self.round_const_prime[r])
+    self.add_round_key(state, rk[r])
+    self.mix_columns(state)
+    self.sub_bytes(state)
+This is inv_P -> AC -> AK -> M -> S.
+
+So if combined_key = rk ^ rc, then:
+
+Forward: P(M(S(state)) ^ combined_key)
+Inverse: S(M(inv_P(state) ^ combined_key))
+In the current code:
+
+def _round_fwd(self, state, key):
+    return self._apply_perm(int(state) ^ int(self._apply_mix(self._apply_sbox(state))) ^ int(key))
+This is P(state ^ M(S(state)) ^ key). The state ^ is wrong.
+
+def _round_inv(self, state, key):
+    temp = self._apply_perm_inv(state)
+    temp = int(temp) ^ int(key)
+    temp = self._apply_mix(temp)
+    temp = self._apply_sbox(temp)
+    return temp
+This is S(M(inv_P(state) ^ key)). Correct!
+
+Now, the encrypt method currently uses:
+
+for i in range(self.a):
+    state = self._round_fwd(state, int(rk[i]) ^ int(self.rc[i]))
+state = int(state) ^ int(h1)
+for i in range(self.b):
+    state = self._round_fwd(state, int(rk[self.a + i]) ^ int(self.rc[self.a + i]))
+This matches the top half of the reference, assuming _round_fwd is fixed.
+
+Then:
+
+drk = list(reversed(rk))
+for i in range(self.b):
+    state = self._round_inv(state, int(drk[i]) ^ int(self.rc_prime[i]))
+state = int(state) ^ int(h2)
+for i in range(self.a):
+    state = self._round_inv(state, int(drk[self.b + i]) ^ int(self.rc_prime[self.b + i]))
+With drk = reversed(rk), this would use reversed keys. But the reference does NOT reverse keys. It uses rk[r] for r in 0..rb-1 and rk[r+rb] for r in 0..ra-1.
+
+So it should be:
+
+for i in range(self.b):
+    state = self._round_inv(state, int(rk[i]) ^ int(self.rc_prime[i]))
+state = int(state) ^ int(h2)
+for i in range(self.a):
+    state = self._round_inv(state, int(rk[self.b + i]) ^ int(self.rc_prime[self.b + i]))
+Now what about the hash key generation?
+
+In the reference generate_round_key:
+
+hk_len = self.state_bytes + self.tweak_bytes
+hk = [[0] * hk_len for _ in range(2)]
+for i in range(hk_len - 1, -1, -1):
+    if i > 0:
+        hk[0][i] = ((key_prime[i] << 1) ^ (key_prime[i - 1] >> 7)) & 0xFF
+        val = (key_prime[i + hk_len] << 2) & 0xFF
+        val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+        hk[1][i] = (val ^ val2) & 0xFF
+    else:
+        hk[0][i] = (key_prime[i] << 1) & 0xFF
+        val = (key_prime[i + hk_len] << 2) & 0xFF
+        val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+        hk[1][i] = ((val ^ val2) & 0xFE) & 0xFF
+For a bit-level integer version:
+
+hk[0] is the first hk_len bytes of key_prime, shifted left by 1 bit. At the byte level, hk[0][0] = key_prime[0] << 1, which forces bit 0 to 0.
+As an integer: hk0_int = ((k_prime_int & ((1 << (hk_len*8)) - 1)) << 1) & ((1 << (hk_len*8)) - 1)
+Wait, not exactly. Because hk[0][i] = (key_prime[i] << 1) ^ (key_prime[i-1] >> 7) for i > 0. This means the MSB of byte i-1 becomes the LSB of byte i after the shift. In integer terms, hk0 = (lower_hk_len_bytes << 1) & mask, where mask = (1 << (hk_len*8)) - 1, and the & mask handles the overflow correctly!
+
+For example, if key_prime[0] = 0xAB and key_prime[1] = 0xCD:
+
+hk[0][0] = 0xAB << 1 = 0x56 (bit 7 of 0xAB is 1, but it goes to bit 8, which is the MSB of hk[0][0]... wait no. 0xAB << 1 = 0x156, but masked to 8 bits it's 0x56. The lost bit 7 (which was 1) should go to bit 0 of the next byte.
+hk[0][1] = (0xCD << 1) ^ (0xAB >> 7) = 0x9A ^ 0x01 = 0x9B.
+As integer (LE): hk0 = 0x9B56. And lower_bytes = 0xCDAB. (0xCDAB << 1) & 0xFFFF = 0x9B56. Yes! The byte-level shift-with-carry is exactly equivalent to integer left shift by 1 bit, masked to the same number of bytes.
+
+For hk[1]: hk[1][0] = ((key_prime[hk_len] << 2) ^ (key_prime[hk_len-1] >> 6)) & 0xFE This is more complex. The lower bit of hk[1][0] is forced to 0. And it's derived from bytes key_prime[hk_len-1 .. 2*hk_len-1].
+
+As integer: (slice << 2) & mask, but then with bit 0 forced to 0? Actually, since hk[1][0] = ... & 0xFE, the LSB of the entire hk1_int would be 0.
+
+Wait, let's check. For i=0: hk[1][0] = (val ^ val2) & 0xFE. Since 0xFE zeros the LSB of byte 0, the overall integer has LSB = 0. For a left shift by 2, the two LSBs would normally be 0. But val2 = key_prime[hk_len-1] >> 6 contributes bits to hk[1][0] at positions 0 and 1. And & 0xFE zeros position 0.
+
+So effectively: hk1_int = ((slice_int << 2) & mask) & ~1? Wait, slice_int includes key_prime[hk_len-1] as the LSB byte. slice_int << 2 shifts the whole thing. But val2 = key_prime[hk_len-1] >> 6 contributes to the lower bits of hk[1][0]. In integer terms: hk1_int = (((slice_int << 2) | ...) & mask) with some specific lower bits.
+
+Actually, it's much simpler to just implement the byte-level algorithm directly using Python's int.to_bytes and int.from_bytes. The THF_Blink_Encryptor can work with byte lists internally and convert at the API boundary.
+
+Given all this, I think the cleanest approach is to rewrite THF_Blink_Encryptor to use the exact byte-level algorithm from the reference, with integer I/O. This guarantees correctness and matches the reference test vectors.
+
+Let me also check that blink_key_schedule needs fixing. The function currently:
+
+Reverses round keys - needs fix
+Generates k1, k2 by bit-slicing - needs fix to use shifted approach
+I can either:
+
+Fix blink_key_schedule to generate correct hash keys
+Or have THF_Blink_Encryptor do its own key/hash generation
+I'll fix both to be consistent with the reference.
+
+Now let me also think about the BLINK64_CVL and BLINK128_CVL docstring tests. They should continue to pass after my changes. Looking at those classes:
+
+They take rks as a parameter
+They don't use blink_key_schedule
+They don't use round constants
+They construct the round function as S -> M -> AK -> P
+So my changes to the helper functions and THF_Blink_Encryptor won't affect them. Good.
+
+One more thing: The _create_blink_mixcolumn_matrix function creates a matrix that is used by both BLINK64_CVL/BLINK128_CVL and THF_Blink_Encryptor. The matrix is correct. But in my standalone test, I implemented MixColumn directly at the nibble level. Let me verify that the Sage matrix in the CiVerLy code gives the same result as the reference byte-level mix_columns.
+
+Actually, this was already verified by the BLINK64_CVL docstring test:
+
+rks_64a = [0xd6a102d888a467e4, ...]
+blink64 = BLINK64_CVL(R=6, rks=rks_64a)
+result = vec_to_int(blink64(int_to_vec(0x0, 64)))
+result == 0xe04d07b55f205fa5
+And the reference encrypt_bytes with the same round keys (for the iterated SPN portion) would give... well, the full THF mode gives 0xa4a0d10502be846e, which is different because THF includes whitening, tweak hashing, etc.
+
+The BLINK64_CVL result 0xe04d07b55f205fa5 is the result of the iterated SPN alone with those specific round keys. Since the existing docstring passes, the MixColumn implementation is correct.
+
+Now, THF_Blink_Encryptor._apply_mix uses the Sage matrix:
+
+def _apply_mix(self, state):
+    return int(self._vec_to_int(self._mixcol * self._int_to_vec(state, self.n)))
+This should produce the same result as the reference mix_columns. Let me verify by testing with specific inputs.
+
+Actually, I already know the full encryptor works after my fixes in the standalone test. The question is whether using the Sage matrix in _apply_mix produces the same result as the byte-level mix_columns.
+
+In the standalone test, I used nibble-level mixcolumns:
+
+col_idx = [j + r * num_cols for r in range(4)]
+coldata = [nibs_in[idx] for idx in col_idx]
+result = [0] * 4
+for r in range(4):
+    for c in range(4):
+        if M_NIBBLE[r][c]:
+            result[r] ^= coldata[c]
+This is equivalent to applying the M_nibble matrix to each column of 4 nibbles.
+
+In the Sage matrix version, the matrix operates on bits, not nibbles. It constructs a bit-level matrix where each nibble's bits are processed independently. Since M_nibble operates on nibbles (XORing whole nibbles), and the matrix in _create_blink_mixcolumn_matrix maps bits preserving the nibble structure (bit 0 of input nibble goes to bit 0 of output nibble, etc.), the two should be equivalent.
+
+Actually, looking at _create_blink_mixcolumn_matrix:
+
+for row in range(4):
+    for col in range(4):
+        if M_nibble[row][col] == 1:
+            for bit in range(4):
+                out_bit = col_words[row] * 4 + bit
+                in_bit = col_words[col] * 4 + bit
+                M[out_bit, in_bit] = 1
+Yes, it applies the same nibble-level XORs to each bit position independently. So the Sage matrix is equivalent to the nibble-level mixcolumns. And my standalone test uses the same nibble-level logic, so it should be consistent.
+
+OK, now let me write the updated code. I'll keep BLINK64_CVL and BLINK128_CVL unchanged, and rewrite everything from line 149 to 529 (the helper functions and THF_Blink_Encryptor).
+
+Actually, I should also keep _create_blink_mixcolumn_matrix since it's used by BLINK64_CVL / BLINK128_CVL.
+
+Wait, THF_Blink_Encryptor currently uses the Sage matrix for _apply_mix. I can either:
+
+Keep using the Sage matrix
+Replace with a standalone integer-level mixcolumns
+Using the standalone integer-level approach might be cleaner and doesn't require calling Sage vectors. But THF_Blink_Encryptor already imports Sage (through _create_blink_mixcolumn_matrix). Let me check if that's an issue.
+
+Actually, looking at the file header:
+
+from civerly.wordsboxcipher import WordSBoxCipher
+from civerly.component import SBox_CVL, LinearLayer_CVL, PermuteLayer_CVL, RoundkeyXOR_CVL
+from sage.matrix.constructor import Matrix as matrix
+from sage.rings.finite_rings.finite_field_constructor import GF
+from sage.crypto.sbox import SBox
+The whole file imports Sage. So THF_Blink_Encryptor can continue using the Sage matrix. But if I want the standalone encryptor to be more self-contained, I could use integer operations.
+
+Let me keep the Sage matrix for now, since that's what the existing code does. But I'll also fix _round_fwd to not use it incorrectly.
+
+Wait, looking at the current broken _round_fwd:
+
+def _round_fwd(self, state, key):
+    return self._apply_perm(int(state) ^ int(self._apply_mix(self._apply_sbox(state))) ^ int(key))
+And _apply_mix:
+
+def _apply_mix(self, state):
+    return int(self._vec_to_int(self._mixcol * self._int_to_vec(state, self.n)))
+It uses int_to_vec and vec_to_int from civerly.util, which are imported inside __init__:
+
+from civerly.util import int_to_vec, vec_to_int
+self._int_to_vec = int_to_vec
+self._vec_to_int = vec_to_int
+So _apply_mix converts the integer to a Sage vector, multiplies by the matrix, and converts back. This works.
+
+But wait, _round_fwd also uses int(state) at the beginning. state is already an integer. So int(state) is fine. But the expression int(state) ^ int(self._apply_mix(...)) ^ int(key) means it XORs the original state with the mixed result and the key. That's definitely wrong.
+
+Now for the full rewrite. Let me structure it carefully:
+
+Keep blink_round_constants_64 but fix rc_prime order
+Replace blink_round_constants_128 with correct values (8 rows that correspond to 128A, which includes 128a)
+Fix blink_k_prime (already correct)
+Fix blink_key_schedule:
+Remove rks[::-1]
+Implement correct hash key generation by shifting
+Fix blink_toeplitz_hash - actually, I think the bit-level version is correct IF the hash keys are correct. But to be safe and guaranteed to match, I might rewrite it or add a byte-level version.
+Rewrite THF_Blink_Encryptor:
+Support all 6 variants
+Fix _round_fwd
+Add decrypt
+Fix encrypt structure
+Update docstrings and test vectors
+Actually, for blink_toeplitz_hash, the reference uses a byte-level approach with HW2. The bit-level version should be equivalent. Let me verify.
+
+Reference hash logic: For each output bit position (byte i, bit l):
+
+temp[j] = (key[tweak_bytes + i - j] << l) ^ (key[tweak_bytes + i - j - 1] >> (8-l))
+p = XOR_j (t[j] & temp[j])
+output_bit = HW2[p]
+HW2[p] is the parity of p for an 8-bit value. But wait, p is computed as XOR of (t[j] & temp[j]) for j in 0..tweak_bytes-1. Each term is an 8-bit value. The XOR is bitwise, so p is an 8-bit value.
+
+Then HW2[p] is the parity of the 8-bit value p. Wait, that can't be right for a Toeplitz hash. A Toeplitz hash computes h = T * t where T is an n×τ matrix and t is a τ-bit vector. Each output bit h[i] should be the dot product of row i of T with t.
+
+But HW2[p] gives the parity of p, which is the dot product of the 8-bit vector p with an all-ones vector. That's not what we want.
+
+Wait, p = XOR_j (t[j] & temp[j]). If t[j] and temp[j] are bytes, then t[j] & temp[j] is a byte. XORing them together gives a byte p. Then HW2[p] is the parity of p. But we want the dot product of the bit-wise AND with all-ones, which is just the parity of the AND. So HW2[p] where p = t[j] & temp[j] XORed together... wait, p is computed as XOR over bytes. The XOR of bytes is bitwise XOR. So the final p is a byte where each bit is: p_bit[k] = XOR_j (t[j][k] & temp[j][k])
+
+Then HW2[p] is the parity of the entire byte p: HW2[p] = XOR_k p[k] = XOR_k XOR_j (t[j][k] & temp[j][k])
+
+But we want the dot product for a single row of the Toeplitz matrix. In the reference, for each output bit l of byte i:
+
+temp[j] contains the key bits that form the j-th column of the Toeplitz row
+t[j] & temp[j] selects the bits where t has 1s
+XOR over j combines the selected bits from all columns
+HW2[p] gives the parity of the combined byte
+Wait, I think I'm overcomplicating this. Let me look at what HW2 actually does.
+
+HW2 is a lookup table where HW2[x] = popcount(x) % 2 (parity). It maps 8-bit values to 0 or 1.
+
+For a single output bit at position (i, l): p = XOR_j (t[j] & temp[j]) (this is an 8-bit value) output_bit = HW2[p] (parity of p)
+
+But this means the output bit depends on ALL bits of t[j] and temp[j], not just the bit at position l! That doesn't seem right for a Toeplitz hash.
+
+Unless... the temp[j] values are specifically constructed so that only one bit in each byte is relevant?
+
+Let me think about temp[j]:
+
+left = (key[self.tweak_bytes + i - j] << l) & 0xFF
+right = (key[self.tweak_bytes + i - j - 1] >> (8 - l)) & 0xFF
+temp[self.tweak_bytes - 1 - j] = left ^ right
+For a given l, left shifts the key byte left by l, so bits 0..7-l move to positions l..7. right shifts the previous key byte right by 8-l, so bits l..7 move to positions 0..7-l.
+
+So temp[j] (after the reversal index [self.tweak_bytes - 1 - j]) has:
+
+bits l..7 coming from key[...] shifted left by l
+bits 0..l-1 coming from key[...-1] shifted right by 8-l
+This effectively forms a l-bit circular shift of the concatenated bits from two adjacent key bytes.
+
+Now t[j] & temp[j]: this selects bits of t[j] where temp[j] has 1s. But temp[j] has l zero bits in the lower positions (from left) and 8-l bits potentially non-zero. Actually, left = key_byte << l, so the lower l bits are 0. right = prev_key_byte >> (8-l), which fills the lower 8-l bits. So temp[j] consists of exactly the bits from the key stream shifted by l positions.
+
+Then p = XOR_j (t[j] & temp[j]). The t[j] bytes are the tweak bytes. The bitwise AND with temp[j] selects the tweak bits where the key matrix has 1s. Since temp[j] has exactly the key bits shifted by l, the lower l bits of temp[j] come from right and the upper 8-l from left.
+
+Then HW2[p] computes the parity of p. But p is a byte. We want p[l] (the bit at position l)? No, we want the parity of all selected bits, which is the dot product.
+
+Wait, HW2[p] = popcount(p) mod 2. And p = XOR_j (t[j] & temp[j]). The popcount of XOR_j (t[j] & temp[j]) mod 2 is: popcount(XOR_j (t[j] & temp[j])) mod 2 = XOR_k XOR_j (t[j][k] & temp[j][k])
+
+But what we want for the Toeplitz hash is: h[i*8+l] = XOR_j XOR_k (T[i*8+l, j*8+k] & t[j*8+k])
+
+In the reference, temp[j] at bit position k contains T[i*8+l, j*8+k]? Let me check.
+
+temp[j] is formed from key[...] shifted. The Toeplitz matrix has T[row, col] = key[row - col + offset] (for some offset). So for row i*8+l and column j*8+k, T[i*8+l, j*8+k] = key[(i-j)*8 + (l-k) + offset].
+
+In the reference, temp[self.tweak_bytes - 1 - j] contains the key bits for column j. The bits are shifted by l. So temp[j][k] = key_bit_for(row=i*8+l, col=j*8+k).
+
+Actually, I think the reference hash is computing exactly the Toeplitz dot product, but using the fact that temp[j] masks the relevant key bits, and HW2[p] computes the parity (which is the dot product over GF(2)).
+
+Wait, but popcount(XOR_j a_j) mod 2 = XOR_j popcount(a_j) mod 2 only if the a_j have disjoint support (no overlapping 1 bits). But t[j] & temp[j] might overlap with t[j'] & temp[j'] at the same bit positions? No, because temp[j] for different j have non-overlapping key bits... hmm, they actually might overlap at the bit level, but the XOR combines them first, and then we take the parity.
+
+Actually, the correct formula is: popcount(a XOR b) mod 2 = (popcount(a) + popcount(b)) mod 2 when a and b have no overlapping 1-bits. But if they do overlap, this doesn't hold.
+
+Wait, popcount(a XOR b) = popcount(a) + popcount(b) - 2*popcount(a & b). So popcount(a XOR b) mod 2 = (popcount(a) + popcount(b)) mod 2. Oh! This is always true because 2*popcount(a & b) is even. So: popcount(XOR_j a_j) mod 2 = XOR_j popcount(a_j) mod 2.
+
+And popcount(t[j] & temp[j]) mod 2 = XOR_k (t[j][k] & temp[j][k]).
+
+So HW2[p] = XOR_j XOR_k (t[j][k] & temp[j][k]).
+
+This is exactly the dot product of t with the Toeplitz row defined by temp! And since temp[j][k] = T[row, j*8+k], this computes h[row] = dot_product(T[row], t).
+
+So the reference hash is correct. And my bit-level blink_toeplitz_hash computes the same thing if the hash keys are correctly generated.
+
+Given all this analysis, I now have a clear picture of what needs to change. Let me write the corrected file.
+
+Actually, for robustness and clarity, I think the best approach is to rewrite THF_Blink_Encryptor to use byte-level operations exactly as the reference does, converting to/from integers at the API boundary. This eliminates any subtle mismatches between bit-level and byte-level representations.
+
+I'll also need to update blink_round_constants_128 to return both 128a and 128A constants. Looking at the current code, there's only one blink_round_constants_128 function. I can replace it with one that returns the full 8-row constants, and the caller uses the first ra+rb rows.
+
+Wait, but looking at the THF_Blink_Encryptor.__init__:
+
+if self.n == 64:
+    self.rc, self.rc_prime = blink_round_constants_64()
+else:
+    self.rc, self.rc_prime = blink_round_constants_128()
+For 128a (ra=3, rb=3, total 6), it would get 8 constants and only use the first 6. That's fine.
+
+For 128A (ra=3, rb=5, total 8), it would get all 8 and use all of them. That's also fine.
+
+So I can just return all 8 constants from `blink
+
+----------
+important stuff
+----------
+
+Now I'll construct the corrected file. The key issues are:
+
+rc_prime in blink_round_constants_64 is reversed
+blink_round_constants_128 has completely wrong values
+blink_key_schedule reverses round keys
+Hash key generation in blink_key_schedule is wrong
+THF_Blink_Encryptor._round_fwd has an extraneous state ^
+THF_Blink_Encryptor.encrypt uses reversed round keys in the bottom half
+THF_Blink_Encryptor is missing variants and a decrypt method
+I will rewrite the relevant parts of the file while keeping BLINK64_CVL and BLINK128_CVL intact. To guarantee correctness, I'll adapt the reference's byte-level algorithm for use in the integer-based THF_Blink_Encryptor.
+
+
+
+Next, I need to fix blink_key_schedule. The main issues:
+
+Remove rks[::-1] (key reversal)
+Fix hash key generation to match the reference
+For hash key generation, the reference generates hk[0] by taking the first hk_len bytes of key_prime and shifting left by 1 bit. hk[1] is derived from bytes key_prime[hk_len-1 .. 2*hk_len-1] shifted left by 2 bits, with LSB of the result forced to 0.
+
+I need to implement this correctly. Let me also update the docstring to reflect that rk is now returned in the natural order [rk_1, ..., rk_{a+b}].
+
+Wait, looking at the current docstring:
+
+sage: [hex(x) for x in rk]
+['0x5', '0x4', '0x3']
+For k = 0x00050004000300020001, n=16, a=2, b=1:
+
+w1 = 0x0001
+w2 = 0x0002
+rk_1 = bits [32:47] = 0x0003
+rk_2 = bits [48:63] = 0x0004
+rk_3 = bits [64:79] = 0x0005
+After the fix (no reversal), rks = [0x0003, 0x0004, 0x0005]. But the docstring expects ['0x5', '0x4', '0x3']. I need to update this.
+
+Wait, let me verify: k = 0x00050004000300020001 In hex: 00 05 00 04 00 03 00 02 00 01 (10 bytes = 80 bits)
+
+w1 = lower 16 bits = 0x0001
+w2 = next 16 bits = 0x0002
+rk_1 = next 16 bits = 0x0003
+rk_2 = next 16 bits = 0x0004
+rk_3 = next 16 bits = 0x0005
+Current code with reversal: rks = [0x0005, 0x0004, 0x0003] -> docstring ['0x5', '0x4', '0x3'] After fix: rks = [0x0003, 0x0004, 0x0005] -> should be ['0x3', '0x4', '0x5']
+
+So I need to update the docstring.
+
+Now for the hash key generation. Let me write a clean implementation.
+
+def blink_key_schedule(k, n, a, b):
+    total_bits = (a + b + 2) * n
+    w1 = k & ((1 << n) - 1)
+    w2 = (k >> n) & ((1 << n) - 1)
+    rks = []
+    for i in range(a + b):
+        rk_val = (k >> (2 * n + i * n)) & ((1 << n) - 1)
+        rks.append(rk_val)
+
+    k_prime = blink_k_prime(k, total_bits)
+    # Generate hash keys following the reference implementation:
+    # hk[0] is the first (n/8 + tau/8) bytes of k_prime shifted left by 1 bit.
+    # hk[1] is bytes k_prime[hk_len-1 .. 2*hk_len-1] shifted left by 2 bits,
+    # with the least-significant bit forced to 0.
+    tau = n
+    hk_len = n // 8 + tau // 8  # state_bytes + tweak_bytes in bytes
+    k1 = ((k_prime & ((1 << (hk_len * 8)) - 1)) << 1) & ((1 << (hk_len * 8)) - 1)
+    # For k2, we take bytes hk_len-1 to 2*hk_len-1 (inclusive), which is hk_len+1 bytes total,
+    # but after shifting left by 2 and masking to hk_len bytes, with LSB forced to 0.
+    slice_mask = (1 << ((hk_len + 1) * 8)) - 1
+    k2_slice = (k_prime >> ((hk_len - 1) * 8)) & slice_mask
+    k2 = ((k2_slice << 2) & ((1 << (hk_len * 8)) - 1)) & ~1
+
+    return rks, w1, w2, k1, k2
+Wait, this might not exactly match the reference's byte-level shift. Let me think more carefully.
+
+The reference generates hk[1] byte by byte:
+
+for i in range(hk_len - 1, -1, -1):
+    if i > 0:
+        val = (key_prime[i + hk_len] << 2) & 0xFF
+        val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+        hk[1][i] = (val ^ val2) & 0xFF
+    else:
+        val = (key_prime[i + hk_len] << 2) & 0xFF
+        val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+        hk[1][i] = ((val ^ val2) & 0xFE) & 0xFF
+For i=0: hk[1][0] = ((key_prime[hk_len] << 2) ^ (key_prime[hk_len - 1] >> 6)) & 0xFE For i=1: hk[1][1] = ((key_prime[hk_len + 1] << 2) ^ (key_prime[hk_len] >> 6)) & 0xFF
+
+Notice that for i>0, the full byte is kept (& 0xFF), but for i=0, the LSB is forced to 0 (& 0xFE).
+
+In integer terms:
+
+Byte 0 of hk[1] has LSB = 0
+Bytes 1..hk_len-1 of hk[1] have all 8 bits
+The overall integer is (slice_int << 2) & mask but with bit 0 forced to 0
+Wait, let me verify. slice_int includes key_prime[hk_len-1] as byte 0. For i=0: hk[1][0] = (key_prime[hk_len] << 2) ^ (key_prime[hk_len-1] >> 6), with LSB=0. Bits 0..1 of hk[1][0] come from val = key_prime[hk_len] << 2 (bits 0..1 are 0) and val2 = key_prime[hk_len-1] >> 6 (bits 0..1 are the top 2 bits of key_prime[hk_len-1]). Then & 0xFE forces bit 0 to 0.
+
+So the actual bits of hk[1]:
+
+Bit 0: 0
+Bit 1: (key_prime[hk_len] << 2)[1] ^ (key_prime[hk_len-1] >> 6)[1] = key_prime[hk_len][0] ^ key_prime[hk_len-1][7]
+Bits 2..7 of byte 0: key_prime[hk_len][0..5]
+Bits 8..15 of byte 1: key_prime[hk_len+1][0..7] with carry from key_prime[hk_len][6..7]
+This is exactly (k2_slice << 2) & mask with bit 0 forced to 0, where k2_slice starts at byte hk_len-1 of k_prime.
+
+Actually, the & 0xFE for i=0 zeros the LSB of the entire hk1_int. So: k2 = ((k2_slice << 2) & ((1 << (hk_len * 8)) - 1)) & ~1
+
+Wait, but k2_slice includes key_prime[hk_len-1] which contributes the top 2 bits to the lower byte. Let me verify:
+
+k2_slice = k_prime >> ((hk_len - 1) * 8) & ((1 << ((hk_len + 1) * 8)) - 1)
+
+This gives us hk_len + 1 bytes starting from byte hk_len-1. k2_slice << 2 shifts this entire value left by 2 bits. & ((1 << (hk_len * 8)) - 1) keeps only the lower hk_len bytes. & ~1 forces bit 0 to 0.
+
+For i=0 (byte 0 of hk[1]): hk[1][0] = (k2_slice[1] << 2) ^ (k2_slice[0] >> 6)) & 0xFE where k2_slice[0] = key_prime[hk_len-1] and k2_slice[1] = key_prime[hk_len].
+
+In integer terms: (k2_slice << 2) has bit 0 = 0 (from k2_slice[0] << 2), bit 1 = k2_slice[0][0], etc. But we also need the carry from k2_slice[0] >> 6 into the lower bits.
+
+Wait, integer left shift by 2: (k2_slice << 2) means byte i of the result gets (k2_slice[i] << 2) | (k2_slice[i-1] >> 6) for i > 0, and for i=0: k2_slice[0] << 2.
+
+But the reference does: For i=0: hk[1][0] = (key_prime[hk_len] << 2) ^ (key_prime[hk_len-1] >> 6) & 0xFE For i=1: hk[1][1] = (key_prime[hk_len+1] << 2) ^ (key_prime[hk_len] >> 6)
+
+So for i=0, it includes the carry from key_prime[hk_len-1] >> 6 into byte 0. But integer left shift (k2_slice << 2) would NOT include this carry if k2_slice starts at byte 0 with key_prime[hk_len-1].
+
+Wait, k2_slice as an integer has key_prime[hk_len-1] as its byte 0 (bits 0..7). (k2_slice << 2) would shift the whole integer, so:
+
+bits 0..1 come from bit 0..1 of k2_slice shifted by 2 (i.e., 0)
+bits 2..7 come from bits 0..5 of k2_slice[0]
+bits 8..9 come from bits 6..7 of k2_slice[0] — wait no, this goes into bits 8..9 which are bits 0..1 of byte 1.
+But the reference puts key_prime[hk_len-1] >> 6 into bits 0..1 of byte 0 (after masking with 0xFE to clear bit 0). The integer left shift puts key_prime[hk_len-1] >> 6 into bits 8..9 (byte 1, bits 0..1), not byte 0!
+
+So k2_slice << 2 is NOT the same as the reference! Because the reference's byte-level shift includes the carry from key_prime[hk_len-1] into byte 0 of the result, whereas integer left shift would put it into byte 1.
+
+Oh wow, this is subtle. The reference effectively treats key_prime[hk_len-1] as being "before" the slice, and its bits overflow into the result's byte 0. But in integer terms, key_prime[hk_len-1] is at a lower position than key_prime[hk_len], so shifting left would move its bits to higher positions, not into the result.
+
+Actually wait, let me reconsider. The reference takes bytes key_prime[hk_len] to key_prime[2*hk_len-1] (hk_len bytes), and shifts them left by 2 bits. But instead of using a separate byte for the overflow, it uses key_prime[hk_len-1] to provide the bits that shift into byte 0.
+
+So the source bytes for hk[1] are:
+
+Byte 0 of result gets overflow from key_prime[hk_len] (bits shifted out) + key_prime[hk_len-1] (provides 2 bits)
+Byte 1 of result gets overflow from key_prime[hk_len+1] + key_prime[hk_len]
+etc.
+In integer terms, if we consider the source as bytes key_prime[hk_len-1 .. 2*hk_len-1] (hk_len+1 bytes), and shift the sub-string key_prime[hk_len .. 2*hk_len-1] left by 2 bits within this window, then:
+
+key_prime[hk_len-1] is the "previous byte" that provides overflow bits into byte 0.
+So k2_slice = k_prime >> ((hk_len-1)*8) gives us byte 0 = key_prime[hk_len-1], byte 1 = key_prime[hk_len], etc. If we then take k2_slice << 2, byte 0 of the result is key_prime[hk_len-1] << 2 (which is wrong — we want byte 0 to be formed from key_prime[hk_len] + overflow from key_prime[hk_len-1]).
+
+Actually, the reference is doing the equivalent of:
+
+source = key_prime[hk_len-1:]  # bytes from hk_len-1 onwards
+result = (int.from_bytes(source, 'little') << 2) & mask
+Wait, if source[0] = key_prime[hk_len-1] and source[1] = key_prime[hk_len]: source_int = key_prime[hk_len-1] + key_prime[hk_len]*256 + ... source_int << 2: bit 0 = 0, bit 1 = 0, bits 2..7 = key_prime[hk_len-1][0..5], bits 8..9 = key_prime[hk_len-1][6..7].
+
+But the reference wants byte 0 of hk[1] to be (key_prime[hk_len] << 2) ^ (key_prime[hk_len-1] >> 6). In integer terms, this means bits 0..1 of the result come from key_prime[hk_len-1][6..7], not from key_prime[hk_len-1][0..1].
+
+So the reference is NOT a simple integer left shift! It's shifting the sub-array key_prime[hk_len .. 2*hk_len-1] left by 2 bits, and using key_prime[hk_len-1] to provide the bits that shift into the LSB positions.
+
+If we view the bytes in little-endian order:
+
+hk[1] is the result
+The source is key_prime[hk_len] to key_prime[2*hk_len-1]
+key_prime[hk_len-1] is the "previous" byte that provides the 2 bits
+In integer terms, if we take source_int = sum(key_prime[hk_len+i] << (8*i) for i in range(hk_len)): Then source_int << 2 would have bits 0..1 = 0. But the reference puts key_prime[hk_len-1][6..7] into bits 0..1.
+
+This means the reference treats the bytes as big-endian for the shift purpose? No... let me look at this more carefully.
+
+val2 = (key_prime[hk_len - 1] >> 6) & 0xFF key_prime[hk_len - 1] >> 6 gives bits 6 and 7 of key_prime[hk_len-1]. These become bits 0 and 1 of hk[1][0].
+
+So the shift direction is: bits move from higher bit positions (6,7) to lower bit positions (0,1). This is a right shift within the byte! But val = key_prime[hk_len] << 2 is a left shift.
+
+Actually, this makes sense if we think of the bytes as forming a big-endian bit string for the shift operation. But the integer representation is little-endian.
+
+Let me think about it differently. The reference is implementing a left shift by 2 bits on the bit string formed by concatenating: key_prime[2*hk_len-1] || ... || key_prime[hk_len] (big-endian order)
+
+After shifting left by 2, the 2 MSBs of key_prime[2*hk_len-1] are lost, and the 2 LSBs that enter from the right come from key_prime[hk_len-1] (the byte "before" the slice).
+
+So hk[1] is the big-endian left shift by 2 of the big-endian byte string key_prime[hk_len] ... key_prime[2*hk_len-1], padded on the right with 2 bits from key_prime[hk_len-1].
+
+In little-endian integer terms: source_be = sum(key_prime[hk_len + i] << (8*(hk_len - 1 - i)) for i in range(hk_len)) result_be = (source_be << 2) | (key_prime[hk_len - 1] >> 6) Then convert back to little-endian bytes, but force bit 0 to 0.
+
+Wait, this is getting complicated. Let me just verify with an example.
+
+For hk_len=2: key_prime = [A, B, C, D, ...] Reference:
+
+i=1: hk[1][1] = (C << 2) ^ (B >> 6)
+i=0: hk[1][0] = (D << 2) ^ (C >> 6) & 0xFE — wait, for hk_len=2:
+i=1: key_prime[1+2] = C, key_prime[1+2-1] = B
+i=0: key_prime[0+2] = B, key_prime[0+2-1] = A
+Wait, I had the indices wrong earlier. Let me recompute.
+
+Actually, the key_prime array in the reference is indexed from 0. For hk_len = state_bytes + tweak_bytes:
+
+For 64a: state_bytes=8, tweak_bytes=8, hk_len=16.
+
+i=15: hk[1][15] = (key_prime[31] << 2) ^ (key_prime[30] >> 6)
+i=0: hk[1][0] = (key_prime[16] << 2) ^ (key_prime[15] >> 6) & 0xFE
+So hk[1] is formed from key_prime[16..31] (16 bytes) shifted left by 2, with key_prime[15] providing the overflow into the LSB.
+
+In integer terms (little-endian):
+
+hk1_int has byte 0 = (key_prime[16] << 2) ^ (key_prime[15] >> 6) & 0xFE
+Byte 1 = (key_prime[17] << 2) ^ (key_prime[16] >> 6)
+Byte 15 = (key_prime[31] << 2) ^ (key_prime[30] >> 6)
+This is equivalent to taking the little-endian integer formed by key_prime[15..31] (17 bytes), shifting it left by 2, taking the lower 16 bytes, and forcing bit 0 to 0.
+
+Let me verify: source_int = sum(key_prime[15+i] << (8*i) for i in range(17)) result_int = (source_int << 2) & ((1 << 128) - 1) Then result_int & ~1 to force bit 0 to 0.
+
+For byte 0: source_int << 2 has bits 0..7 = (key_prime[15] << 2) & 0xFF... wait no. source_int has byte 0 = key_prime[15], byte 1 = key_prime[16]. source_int << 2: byte 0 = key_prime[15] << 2 (mod 256), byte 1 = (key_prime[16] << 2) ^ (key_prime[15] >> 6).
+
+But the reference has:
+
+byte 0 = (key_prime[16] << 2) ^ (key_prime[15] >> 6) & 0xFE
+byte 1 = (key_prime[17] << 2) ^ (key_prime[16] >> 6)
+So source_int << 2 gives byte 0 = key_prime[15] << 2, which is WRONG. We need byte 0 to be based on key_prime[16].
+
+The issue is that source_int uses key_prime[15] as the LSB byte, but the reference uses key_prime[16] as the effective LSB byte of the slice being shifted!
+
+Ah, I see! The reference is shifting the sub-array key_prime[16..31] left by 2 bits, and key_prime[15] is just providing the 2 bits that shift in from the "right" (lower address). In a big-endian shift, key_prime[15] is to the left of key_prime[16], so bits from key_prime[15] shift into key_prime[16]'s positions.
+
+But in little-endian integer representation, key_prime[15] is at a LOWER bit position than key_prime[16]. So if we shift left (to higher bit positions), key_prime[15] moves to even higher positions, not into the position of key_prime[16].
+
+So the reference's shift is big-endian! It treats the bytes as a big-endian stream and shifts left (towards higher addresses). In big-endian:
+
+byte 0 = key_prime[16], byte 1 = key_prime[17], ..., byte 15 = key_prime[31]
+Shift left by 2: bit 0 of result = bit 6 of key_prime[15] (the byte before), bit 1 = bit 7 of key_prime[15]
+byte 0 of result = (key_prime[16] << 2) | (key_prime[15] >> 6)
+Yes! This exactly matches the reference.
+
+In integer terms (little-endian): source_be = sum(key_prime[16 + i] << (8*(15 - i)) for i in range(16)) result_be = (source_be << 2) | ((key_prime[15] >> 6) & 0x3) result_bytes = result_be.to_bytes(16, 'big') result_int = int.from_bytes(result_bytes, 'little') = sum(result_bytes[i] << (8*i) for i in range(16))
+
+And then force bit 0 to 0: result_int & ~1? Wait, for i=0 the reference does & 0xFE, which zeros the LSB of byte 0. In integer terms, this is result_int & ~1.
+
+Actually, result_be << 2 puts key_prime[15][6] into the MSB (bit 127) and key_prime[15][7] into bit 126? No...
+
+Wait, in big-endian shift left: source_be = key_prime[16] * 2^120 + key_prime[17] * 2^112 + ... + key_prime[31] result_be = (source_be << 2) | (key_prime[15] >> 6) After shift, the 2 MSBs of source_be are lost. The 2 LSBs come from key_prime[15] >> 6. Since key_prime[15] is an 8-bit value, key_prime[15] >> 6 gives a 2-bit value (bits 6 and 7). So result_be is a 130-bit value, but we only keep the lower 128 bits (16 bytes).
+
+Converting result_be to big-endian bytes of length 16: result_bytes[0] (MSB) = (result_be >> 120) & 0xFF ...
+
+This is equivalent to: result_int_le = int.from_bytes(result_be.to_bytes(16, 'big'), 'little')
+
+Let me check with a simpler example. hk_len=1:
+
+i=0: hk[1][0] = ((key_prime[1] << 2) ^ (key_prime[0] >> 6)) & 0xFE For a 1-byte result, source_be = key_prime[1], result_be = (key_prime[1] << 2) | (key_prime[0] >> 6), keep lower 8 bits: result_be & 0xFF, then & 0xFE. In little-endian: result_int = result_be & 0xFE.
+Using the formula: source_int_le = key_prime[0] + key_prime[1]*256 source_int_le << 2 = key_prime[0]*4 + key_prime[1]*1024 Lower byte = (key_prime[0]*4) & 0xFF. But we want (key_prime[1]*4) ^ (key_prime[0]>>6) & 0xFE.
+
+So source_int_le << 2 is WRONG. We need to reverse the bytes first, shift, then reverse back.
+
+So the correct approach is:
+
+# For hk[0]:
+source = k_prime & ((1 << (hk_len * 8)) - 1)  # lower hk_len bytes
+source_be = int.to_bytes(source, hk_len, 'little')[::-1]  # convert to big-endian bytes
+source_be_int = int.from_bytes(source_be, 'big')
+result_be_int = (source_be_int << 1) & ((1 << (hk_len * 8)) - 1)
+result_le = int.to_bytes(result_be_int, hk_len, 'big')[::-1]
+k1 = int.from_bytes(result_le, 'little')
+
+# For hk[1]:
+prev_byte = (k_prime >> ((hk_len - 1) * 8)) & 0xFF
+source = (k_prime >> (hk_len * 8)) & ((1 << (hk_len * 8)) - 1)
+source_be = int.to_bytes(source, hk_len, 'little')[::-1]
+source_be_int = int.from_bytes(source_be, 'big')
+result_be_int = ((source_be_int << 2) | (prev_byte >> 6)) & ((1 << (hk_len * 8)) - 1)
+result_le = int.to_bytes(result_be_int, hk_len, 'big')[::-1]
+k2 = int.from_bytes(result_le, 'little') & ~1  # force bit 0 to 0
+But this is very inefficient with all the byte conversions. Let me think of a cleaner integer formula.
+
+Actually, the key insight is that the reference is doing a big-endian left shift. For little-endian integer X with N bytes:
+
+Reverse bytes: X_rev = sum((X >> (8*i) & 0xFF) << (8*(N-1-i)) for i in range(N))
+Shift left by s: X_rev << s
+Mask to N bytes: (X_rev << s) & ((1 << (N*8)) - 1)
+Reverse back: the result's byte i = byte (N-1-i) of the shifted value.
+Wait, there's a simpler way. The reverse of (X_rev << s) is equivalent to (X << s) if we view bytes in reverse order... no, that doesn't work either.
+
+Let me think about what the reference does to each byte position. For a big-endian left shift by 1: result[i] = (source[i] << 1) | (source[i-1] >> 7) for i > 0 result[0] = (source[0] << 1) & 0xFF (for hk[0], but actually source[-1] doesn't exist so LSB is 0)
+
+Here source[0] is the MSB byte (highest address in big-endian, or the "first" byte printed). In the reference, source[i] means key_prime[i] where i increases with address.
+
+For hk[0]: source[i] = key_prime[i] for i in 0..hk_len-1. Big-endian left shift by 1:
+
+result[0] = source[0] << 1 (MSB byte shifted, LSB is 0)
+result[i] = (source[i] << 1) | (source[i-1] >> 7)
+In little-endian integer terms:
+
+result_byte[i] (where i=0 is LSB) corresponds to result[hk_len - 1 - i] in big-endian indexing.
+source_byte[i] (LE) corresponds to source[hk_len - 1 - i] in BE indexing.
+So for LE byte j of the result: BE_index = hk_len - 1 - j result_BE[BE_index] = (source_BE[BE_index] << 1) | (source_BE[BE_index - 1] >> 7) for BE_index > 0 result_BE[0] = source_BE[0] << 1
+
+Converting back to LE byte j: result_LE[j] = result_BE[hk_len - 1 - j] source_LE[k] = source_BE[hk_len - 1 - k]
+
+For j = hk_len - 1 (BE_index = 0): result_LE[hk_len-1] = source_BE[0] << 1 = source_LE[hk_len-1] << 1
+
+For j = 0 (BE_index = hk_len - 1): result_LE[0] = (source_BE[hk_len-1] << 1) | (source_BE[hk_len-2] >> 7) = (source_LE[0] << 1) | (source_LE[1] >> 7)
+
+So:
+
+result_LE[0] = (source_LE[0] << 1) | (source_LE[1] >> 7)
+result_LE[j] = (source_LE[j] << 1) | (source_LE[j+1] >> 7) for j in 1..hk_len-2
+result_LE[hk_len-1] = source_LE[hk_len-1] << 1
+This is exactly a little-endian right shift by 1 bit (with bits moving from higher byte to lower byte)!
+
+Wait: (source_LE[j] << 1) | (source_LE[j+1] >> 7) means bit 0 of result_LE[j] comes from bit 7 of source_LE[j+1]. That's a right shift of the bit stream! Bits move from byte j+1 to byte j.
+
+So a big-endian left shift by 1 is equivalent to a little-endian right shift by 1!
+
+For hk[0]: k1_int = (k_prime_slice >> 1) & ((1 << (hk_len*8)) - 1) ?
+
+Wait, let me verify. k_prime_slice is the lower hk_len bytes. k_prime_slice >> 1: bit j of result comes from bit j+1 of source.
+
+Byte 0 of result: bits 0..6 come from bits 1..7 of source_LE[0], bit 7 comes from bit 0 of source_LE[1].
+This matches: (source_LE[0] >> 1) | ((source_LE[1] & 1) << 7).
+But the reference gives: (source_LE[0] << 1) | (source_LE[1] >> 7).
+
+These are OPPOSITE! One is a left shift within the byte with overflow from the next byte's MSB, the other is a right shift with underflow from the next byte's LSB.
+
+So big-endian left shift by 1 is NOT the same as little-endian right shift by 1. It's something else entirely.
+
+OK, I think the cleanest approach for blink_key_schedule is to just work with bytes explicitly. Let me rewrite it to convert k to bytes, perform the key schedule byte-by-byte as the reference does, and convert back to integers. This is unambiguous and guaranteed to be correct.
+
+Since this is definitely correct and avoids all the confusion, let me do that.
+
+... (differences between bit and byte orientation)
+
+The byte-level hash matches perfectly. Now I need to:
+
+Replace blink_toeplitz_hash with the byte-level version
+Rewrite THF_Blink_Encryptor to fix all the identified bugs
+Let me now write the complete rewrite of the THF_Blink_Encryptor class and the blink_toeplitz_hash function.
+
+For the THF_Blink_Encryptor, I can either: a) Keep the integer/nibble-based approach and just fix the bugs b) Use byte-level operations like the reference
+
+Option (a) is simpler since I only need to fix:
+
+_round_fwd: remove extraneous state ^
+encrypt: use non-reversed keys in the bottom half
+Add decrypt
+Add missing variants
+Use the corrected hash function
+Actually, option (a) is much more straightforward. And since the MixColumn matrix is already verified to be correct, I can keep using _apply_mix with the Sage matrix.
+
+Wait, but I should also verify that the integer-level _apply_mix gives the same result as the reference mix_columns. Let me do a quick check.
+
+Actually, I already did this implicitly: BLINK64_CVL uses the Sage matrix and its docstring test passes. The docstring test checks that with specific round keys, BLINK64_CVL(R=6, rks=rks_64a) gives 0xe04d07b55f205fa5. If I compute the same with the reference's byte-level operations but without the THF mode stuff, it should match.
+
+Let me verify quickly. In the reference, for the top half of the THF mode with specific round keys (without whitening and hash), the first 2 rounds use rk[0] and rk[1], then there's a hash+perm, then 3 rounds with rk[2..4]. The BLINK64_CVL test uses all 7 round keys in sequence (rk as both the forward and inverse round keys). Actually no, BLINK64_CVL is just an iterated SPN, it doesn't model the THF structure.
+
+So the Sage matrix MixColumn and the reference byte-level MixColumn might differ in bit ordering. But since BLINK64_CVL's docstring passes, and it's been used for cryptanalysis, I should keep it.
+
+However, for THF_Blink_Encryptor, I need to make sure the round functions match the reference exactly. The current _apply_mix uses Sage vectors. If there's a mismatch in bit ordering between the Sage matrix and the reference, the test vectors won't pass.
+
+Actually wait - the user wants the CiVerLy implementation corrected using the reference. So I should make sure THF_Blink_Encryptor matches the reference. Given the complexity of ensuring the integer/nibble approach matches byte-for-byte, the safest approach is to make THF_Blink_Encryptor use the exact byte-level algorithm from the reference, and only convert to/from integers at the API boundary.
+
+This ensures there are no bit-ordering mismatches. I'll write the class to process everything as byte lists internally, exactly like the reference BlinkCipher class, but packaged into the THF_Blink_Encryptor API.
+
+Let me prepare the complete replacement from line 331 to line 529 of the original file (the blink_toeplitz_hash function and the THF_Blink_Encryptor class).
+
+The replacement will include:
+
+New blink_toeplitz_hash function (byte-level, matching reference)
+Rewritten THF_Blink_Encryptor with all 6 variants, correct encrypt/decrypt, and reference-matching operations
+I need to also make sure the new THF_Blink_Encryptor still uses _create_blink_mixcolumn_matrix correctly? No, I can implement MixColumn as byte-level operations internally. That way there's no dependency on the Sage matrix for the THF encryptor.
+
+Actually, the THF encryptor doesn't need to use the Sage matrix at all if it implements the byte-level operations directly. This makes it more self-contained and avoids any potential ordering mismatches.
+
+Let me write the replacement. I'll use byte lists internally and nibble-level operations for the S-box, MixColumn, Permutation, etc.
+
+For the permutation, the reference processes nibbles:
+
+def permutation(self, state):
+    temp = [0] * self.state_nibbles
+    for i in range(self.state_nibbles):
+        byte_index = i // 2
+        high_nibble = (i % 2 == 1)
+        temp[i] = (state[byte_index] >> 4) & 0xF if high_nibble else state[byte_index] & 0xF
+    permuted = [0] * self.state_nibbles
+    for i in range(self.state_nibbles):
+        permuted[i] = temp[self.pbox[i]]
+    for i in range(self.state_bytes):
+        state[i] = ((permuted[2 * i + 1] << 4) | permuted[2 * i]) & 0xFF
+I'll implement this in the new THF_Blink_Encryptor.
+
+For MixColumn:
+
+def mix_columns(self, state):
+    cols = self.state_nibbles // 4
+    for col in range(cols):
+        coldata = [0] * 4
+        for r in range(4):
+            idx = col + r * cols
+            byte_index = idx // 2
+            high_nibble = (idx % 2 == 1)
+            nibble = (state[byte_index] >> 4) & 0xF if high_nibble else state[byte_index] & 0xF
+            coldata[r] = nibble
+        result = [0] * 4
+        for r in range(4):
+            for c in range(4):
+                if M_MATRIX[r][c]:
+                    result[r] ^= coldata[c]
+        for r in range(4):
+            idx = col + r * cols
+            byte_index = idx // 2
+            high_nibble = (idx % 2 == 1)
+            if high_nibble:
+                state[byte_index] = ((result[r] << 4) | (state[byte_index] & 0xF)) & 0xFF
+            else:
+                state[byte_index] = (state[byte_index] & 0xF0) | result[r]
+This is exactly the reference.
+
+For the API boundary, I'll convert integers to/from byte lists. The master key k has length (a+b+2)*n bits. t has length tau = n bits for the supported variants. m has length n bits.
+
+For bytes, I'll use little-endian representation (matching the reference): int_to_bytes(val, num_bytes) = [(val >> (8*i)) & 0xFF for i in range(num_bytes)] bytes_to_int(byte_list) = sum(byte_list[i] << (8*i) for i in range(len(byte_list)))
+
+Now let me write the complete replacement.
+
+Hmm, the 64-bit variants pass but the 128-bit variants fail. Since decrypt works correctly (round-trip passes), the issue is likely with the round constants for 128-bit.
+
+Let me check the 128-bit constants more carefully. The reference ROUND_CONST_128a has 6 rows, and ROUND_CONST_128A has 8 rows. My blink_round_constants_128 returns 8 rows which correspond to the 128A constants.
+
+For 128a, ra=3, rb=3, the encrypt function uses self.rc[r] for r in 0..2 (top a rounds) and r in 3..5 (top b rounds), and self.rc_prime[r] for r in 0..2 (bottom b rounds) and r in 3..5 (bottom a rounds).
+
+If my constants are the 128A constants (8 rows), then for 128a it would use rows 0..5. But wait, the 128a reference uses ROUND_CONST_128a which has 6 rows. And ROUND_CONST_128A's first 6 rows are exactly ROUND_CONST_128a!
+
+Wait, let me double-check. From the reference file:
+
+ROUND_CONST_128a = [
+    [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24],
+    [0x89, 0x6c, 0x4e, 0xec, 0x98, 0xfa, 0x2e, 0x08, 0xd0, 0x31, 0x9f, 0x29, 0x22, 0x38, 0x09, 0xa4],
+    [0x6c, 0x0c, 0xe9, 0x34, 0xcf, 0x66, 0x54, 0xbe, 0x77, 0x13, 0xd0, 0x38, 0xe6, 0x21, 0x28, 0x45],
+    [0x17, 0x09, 0x47, 0xb5, 0xb5, 0xd5, 0x84, 0x3f, 0xdd, 0x50, 0x7c, 0xc9, 0xb7, 0x29, 0xac, 0xc0],
+    [0xac, 0xb5, 0xdf, 0x98, 0xa6, 0x0b, 0x31, 0xd1, 0x1b, 0xfb, 0x79, 0x89, 0xd9, 0xd5, 0x16, 0x92],
+    [0x96, 0x7e, 0x26, 0x6a, 0xed, 0xaf, 0xe1, 0xb8, 0xb7, 0xdf, 0x1a, 0xd0, 0xdb, 0x72, 0xfd, 0x2f],
+]
+
+ROUND_CONST_128A = [
+    [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24],
+    [0x89, 0x6c, 0x4e, 0xec, 0x98, 0xfa, 0x2e, 0x08, 0xd0, 0x31, 0x9f, 0x29, 0x22, 0x38, 0x09, 0xa4],
+    [0x6c, 0x0c, 0xe9, 0x34, 0xcf, 0x66, 0x54, 0xbe, 0x77, 0x13, 0xd0, 0x38, 0xe6, 0x21, 0x28, 0x45],
+    [0x17, 0x09, 0x47, 0xb5, 0xb5, 0xd5, 0x84, 0x3f, 0xdd, 0x50, 0x7c, 0xc9, 0xb7, 0x29, 0xac, 0xc0],
+    [0xac, 0xb5, 0xdf, 0x98, 0xa6, 0x0b, 0x31, 0xd1, 0x1b, 0xfb, 0x79, 0x89, 0xd9, 0xd5, 0x16, 0x92],
+    [0x96, 0x7e, 0x26, 0x6a, 0xed, 0xaf, 0xe1, 0xb8, 0xb7, 0xdf, 0x1a, 0xd0, 0xdb, 0x72, 0xfd, 0x2f],
+    [0xf7, 0x6c, 0x91, 0xb3, 0x47, 0x99, 0xa1, 0x24, 0x99, 0x7f, 0x2c, 0xf1, 0x45, 0x90, 0x7c, 0xba],
+    [0x69, 0x4e, 0x57, 0x71, 0xd8, 0x20, 0x69, 0x63, 0x16, 0xfc, 0x8e, 0x85, 0xe2, 0xf2, 0x01, 0x08],
+]
+Yes! ROUND_CONST_128A rows 0-5 = ROUND_CONST_128a rows 0-5. So the constants should be correct for both 128a and 128A.
+
+Wait, but the 128a test fails. Since decrypt is correct (round-trip passes), the issue must be that my encrypt produces a different ciphertext than expected, but is still a valid encrypt. This means either:
+
+The constants are wrong
+The round key order is wrong
+The hash key generation is wrong
+Some other detail differs
+But if decrypt recovers the plaintext, then encrypt and decrypt are inverses of each other. This means the constants and keys are consistent within my implementation, but might not match the reference.
+
+Wait, let me verify the reference actually produces the expected ciphertext for 128a. The reference's run_tests() already verified that and passed. So the reference definitely gives 0xb722eef350bb182074a6ff13c967a593.
+
+My standalone CorrectedTHF_Blink_Encryptor from test_civerly_blink.py also passed all tests. Let me compare my updated implementation with that standalone version...
+
+Actually wait, the standalone test_civerly_blink.py passed all 6 tests. Let me compare the code more carefully.
+
+In test_civerly_blink.py, the _encrypt_bytes method uses:
+
+self._whitening(state, w[0])
+for r in range(self.ra):
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, rk[r])
+    self.add_round_constant(state, self.round_const[r])
+    self.permutation(state)
+Note: self.round_const[r] is a byte array from the reference.
+
+In my updated THF_Blink_Encryptor._encrypt_bytes:
+
+self._whitening(state, w[0])
+for r in range(self.ra):
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, rk[r])
+    self._add_round_constant(state, _int_to_bytes(self.rc[r], self.state_bytes))
+    self._permutation(state)
+Here _int_to_bytes(self.rc[r], self.state_bytes) converts the integer constant to bytes. But wait, self.rc[r] is a 128-bit integer for 128-bit variants. _int_to_bytes(0x243f6a8885a308d313198a2e03707344, 16) gives [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24].
+
+And the reference ROUND_CONST_128a[0] is exactly [0x44, 0x73, ..., 0x24]. So the bytes match!
+
+But wait, in the test_civerly_blink.py standalone version, it uses self.round_const directly from the reference (which are byte arrays). In my updated code, I convert integer constants to bytes. The bytes should be the same.
+
+Hmm, let me look at the 128a test case more carefully. In the standalone version, ROUND_CONST_128a is used for 128a and 128b. And ROUND_CONST_128A is used for 128A and 128B.
+
+In my blink_round_constants_128(), I return the 128A constants (8 rows). For 128a, self.ra=3, self.rb=3, so it uses rc[0..5] and rc_prime[0..5]. These should be the same as ROUND_CONST_128a and ROUND_CONST_PRIME_128a.
+
+Let me verify by comparing the integer values:
+
+ROUND_CONST_128a[0] = [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24]
+LE integer = 0x243f6a8885a308d313198a2e03707344 My rc[0] = 0x243f6a8885a308d313198a2e03707344. Match!
+
+Now let me check if maybe the reference file uses different constants for the 128a test. Actually, I already know the reference uses ROUND_CONST_128a for 128a and it passes. And ROUND_CONST_128a rows 0-5 match ROUND_CONST_128A rows 0-5.
+
+So the constants should be correct. The fact that decrypt works means the algorithm is internally consistent, but the mapping of integer constants to bytes might be different.
+
+Wait! Let me verify more carefully. Maybe rc[5] in my constants doesn't match ROUND_CONST_128a[5].
+
+Reference ROUND_CONST_128a[5]: [0x96, 0x7e, 0x26, 0x6a, 0xed, 0xaf, 0xe1, 0xb8, 0xb7, 0xdf, 0x1a, 0xd0, 0xdb, 0x72, 0xfd, 0x2f] LE integer = 0x2ffd72dbd01adfb7b8e1afed6a267e96
+
+My rc[5] = 0x2ffd72dbd01adfb7b8e1afed6a267e96. Match!
+
+What about the sixth row of 128A? My rc[6] = 0xba7c9045f12c7f9924a19947b3916cf7 which is row 6 of 128A. For 128a, ra+rb=6, so rows 0..5 are used. That's correct.
+
+Let me look at rc_prime: Reference ROUND_CONST_PRIME_128a[5]: [0x94, 0xab, 0x55, 0xaa, 0xf3, 0x25, 0x55, 0xe6, 0x60, 0x5c, 0x60, 0x55, 0xda, 0x2f, 0xaf, 0x78] LE integer = 0x78af2fda55605c60e65525f3aa55ab94
+
+My rc_prime[5] = 0x78af2fda55605c60e65525f3aa55ab94. Match!
+
+OK, so the constants are correct. Then why does 128a fail?
+
+Let me look at the test_civerly_blink.py that passed all tests. That was a standalone class CorrectedTHF_Blink_Encryptor. Maybe I made a subtle mistake in transcribing it to the actual source file.
+
+Let me compare the two encrypt methods more carefully.
+
+In test_civerly_blink.py:
+
+def encrypt(self, state, rk, w, h):
+    self.whitening(state, w[0])
+    for r in range(self.ra):
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, rk[r])
+        self.add_round_constant(state, self.round_const[r])
+        self.permutation(state)
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, h[0])
+    self.permutation(state)
+    for r in range(self.rb):
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, rk[r + self.ra])
+        self.add_round_constant(state, self.round_const[r + self.ra])
+        self.permutation(state)
+    ...
+In my updated _encrypt_bytes:
+
+def _encrypt_bytes(self, state, rk, w, h):
+    self._whitening(state, w[0])
+    for r in range(self.ra):
+        self._sub_bytes(state)
+        self._mix_columns(state)
+        self._add_round_key(state, rk[r])
+        self._add_round_constant(state, _int_to_bytes(self.rc[r], self.state_bytes))
+        self._permutation(state)
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, h[0])
+    self._permutation(state)
+    for r in range(self.rb):
+        self._sub_bytes(state)
+        self._mix_columns(state)
+        self._add_round_key(state, rk[r + self.ra])
+        self._add_round_constant(state, _int_to_bytes(self.rc[r + self.ra], self.state_bytes))
+        self._permutation(state)
+    ...
+The structure looks identical. But self.round_const[r] in the standalone is a byte list, whereas in my updated code it's an integer converted to bytes.
+
+Wait, _int_to_bytes for each round means we create a new byte list every round. That's fine.
+
+Let me think about what else could be different...
+
+Oh! In the standalone test, self.round_const for 128a comes from ROUND_CONST_128a which is a list of 6 byte lists. And self.round_const_prime comes from ROUND_CONST_PRIME_128a which is also 6 byte lists.
+
+In my updated blink_round_constants_128(), I return 8 constants each. For 128a, the THF encryptor uses self.rc[r] for r in range(self.ra) and range(self.rb). For ra=3, rb=3, it uses indices 0,1,2 and 3,4,5. It never uses indices 6,7.
+
+But wait, what if rc_prime is wrong for index 0 in my updated code?
+
+Actually, let me re-read the original reference ROUND_CONST_PRIME_128a:
+
+ROUND_CONST_PRIME_128a = [
+    [0x58, 0xb6, 0x8e, 0x72, 0x8f, 0x74, 0x95, 0x0d, 0x7e, 0x3d, 0x93, 0xf4, 0xa3, 0xfe, 0x58, 0xa4],
+    [0xb5, 0x59, 0x5a, 0xc2, 0x1d, 0xa4, 0x54, 0x7b, 0xee, 0x4a, 0x15, 0x82, 0x58, 0xcd, 0x8b, 0x71],
+    [0xf0, 0x85, 0x60, 0x28, 0x23, 0xb0, 0xd1, 0xc5, 0x13, 0x60, 0xf2, 0x2a, 0x39, 0xd5, 0x30, 0x9c],
+    [0x0e, 0x18, 0x3a, 0x60, 0xb0, 0xdc, 0x79, 0x8e, 0xef, 0x38, 0xdb, 0xb8, 0x18, 0x79, 0x41, 0xca],
+    [0x27, 0x4b, 0x31, 0xbd, 0xc1, 0x77, 0x15, 0xd7, 0x3e, 0x8a, 0x1e, 0xb0, 0x8b, 0x0e, 0x9e, 0x6c],
+    [0x94, 0xab, 0x55, 0xaa, 0xf3, 0x25, 0x55, 0xe6, 0x60, 0x5c, 0x60, 0x55, 0xda, 0x2f, 0xaf, 0x78],
+]
+And ROUND_CONST_PRIME_128A:
+
+ROUND_CONST_PRIME_128A = [
+    [0x58, 0xb6, 0x8e, 0x72, 0x8f, 0x74, 0x95, 0x0d, 0x7e, 0x3d, 0x93, 0xf4, 0xa3, 0xfe, 0x58, 0xa4],
+    [0xb5, 0x59, 0x5a, 0xc2, 0x1d, 0xa4, 0x54, 0x7b, 0xee, 0x4a, 0x15, 0x82, 0x58, 0xcd, 0x8b, 0x71],
+    [0xf0, 0x85, 0x60, 0x28, 0x23, 0xb0, 0xd1, 0xc5, 0x13, 0x60, 0xf2, 0x2a, 0x39, 0xd5, 0x30, 0x9c],
+    [0x0e, 0x18, 0x3a, 0x60, 0xb0, 0xdc, 0x79, 0x8e, 0xef, 0x38, 0xdb, 0xb8, 0x18, 0x79, 0x41, 0xca],
+    [0x27, 0x4b, 0x31, 0xbd, 0xc1, 0x77, 0x15, 0xd7, 0x3e, 0x8a, 0x1e, 0xb0, 0x8b, 0x0e, 0x9e, 0x6c],
+    [0x94, 0xab, 0x55, 0xaa, 0xf3, 0x25, 0x55, 0xe6, 0x60, 0x5c, 0x60, 0x55, 0xda, 0x2f, 0xaf, 0x78],
+    [0xb6, 0x10, 0xab, 0x2a, 0x6a, 0x39, 0xca, 0x55, 0x40, 0x14, 0xe8, 0x63, 0x62, 0x98, 0x48, 0x57],
+    [0x93, 0xe9, 0x72, 0x7c, 0xaf, 0x86, 0x54, 0xa1, 0xce, 0xe8, 0x41, 0x11, 0x34, 0x5c, 0xcc, 0xb4],
+]
+Yes, rows 0-5 match!
+
+OK wait, let me think again. The 64-bit tests pass. The 128-bit tests fail but decrypt works. This means my implementation is internally consistent but differs from the reference in some way that only affects 128-bit.
+
+Wait... could it be the P-box? Let me double-check _BLINK_P_128:
+
+Current CiVerLy:
+
+_BLINK_P_128 = [5, 12, 4, 1, 17, 9, 10, 16, 28, 14, 21, 22, 11, 27, 8, 13,
+                2, 25, 18, 3, 30, 6, 19, 20, 0, 23, 24, 31, 7, 15, 29, 26]
+Reference:
+
+PBOX_128 = [
+    5, 12, 4, 1, 17, 9, 10, 16,
+    28, 14, 21, 22, 11, 27, 8, 13,
+    2, 25, 18, 3, 30, 6, 19, 20,
+    0, 23, 24, 31, 7, 15, 29, 26,
+]
+These match! So the P-box is correct.
+
+What about the S-box?
+
+_BLINK_SBOX_VALUES = [0x1, 0x0, 0x9, 0x3, 0x8, 0x5, 0xe, 0x7,
+                      0x4, 0x2, 0xc, 0xb, 0xa, 0xf, 0x6, 0xd]
+Reference:
+
+SBOX = [
+    0x1, 0x0, 0x9, 0x3,
+    0x8, 0x5, 0xE, 0x7,
+    0x4, 0x2, 0xC, 0xB,
+    0xA, 0xF, 0x6, 0xD,
+]
+These match.
+
+What about MixColumn? Both use the same M_MATRIX.
+
+Wait, could the issue be in _int_to_bytes? For a 128-bit integer, _int_to_bytes(val, 16) returns 16 bytes. The first byte is the LSB. This matches the reference's list(reversed(list(plaintext))) approach.
+
+Actually, let me trace through what happens with the 128a test. In the reference encrypt_bytes:
+
+state = list(reversed(list(plaintext)))
+For plaintext 0x00...00 (16 bytes), state is [0]*16.
+
+Then whitening with w[0]: state[i] ^= w[0][i]. For the test vector, w[0] is the lower 128 bits of the master key = 0x97779021b38e7fa1... (in big-endian, the last 16 bytes of the key reversed).
+
+Wait, in the reference generate_round_key:
+
+for i in range(self.state_bytes):
+    w[0][i] = master_key[i]
+And master_key = list(reversed(list(key))). For key = bytes.fromhex(hex_string). If hex_string is big-endian, then key[0] is the MSB byte. Reversed, master_key[0] is the LSB byte.
+
+So w[0][0] = LSB byte of the key = 0xa1 for the 64a key.
+
+And in the CiVerLy convention, w1 = k & ((1 << n) - 1) is also the LSB n bits. So w1 in CiVerLy matches w[0] in the reference.
+
+In my _int_to_bytes(k, self.key_bytes), master_key[0] = LSB byte of k. This matches.
+
+And _int_to_bytes(w1, self.state_bytes) would give w[0] as the LSB bytes. Good.
+
+Wait, but in my _encrypt_bytes, I pass w directly (which comes from _generate_round_key). Let me check _generate_round_key:
+
+for i in range(self.state_bytes):
+    w[0][i] = master_key[i]
+    w[1][i] = master_key[i + self.state_bytes]
+This matches the reference exactly.
+
+What about round keys?
+
+for j in range(self.ra + self.rb):
+    rk[j][i] = master_key[i + (j + 2) * self.state_bytes]
+This also matches.
+
+What about hash keys?
+
+for i in range(hk_len - 1, -1, -1):
+    if i > 0:
+        hk[0][i] = ((key_prime[i] << 1) ^ (key_prime[i - 1] >> 7)) & 0xFF
+        ...
+    else:
+        hk[0][i] = (key_prime[i] << 1) & 0xFF
+        ...
+This matches the reference exactly.
+
+What about _hash_func?
+
+h[0] = self._hash_func(hk[0], t, self.state_bytes, self.tweak_bytes)
+And _hash_func matches the reference exactly.
+
+So the key schedule and hash should be identical to the reference. If the 64-bit tests pass and the 128-bit tests fail, there must be something different about the 128-bit operations.
+
+Wait, let me think about num_cols = self.state_nibbles // 4 in _mix_columns. For 128-bit, state_nibbles = 32, so num_cols = 8. The reference also has cols = self.state_nibbles // 4 = 8.
+
+In _mix_columns:
+
+for col in range(cols):
+    coldata = [0] * 4
+    for r in range(4):
+        idx = col + r * cols
+        byte_index = idx // 2
+        high_nibble = (idx % 2 == 1)
+        nibble = (state[byte_index] >> 4) & 0xF if high_nibble else state[byte_index] & 0xF
+        coldata[r] = nibble
+For col=0, r=0: idx=0, byte_index=0, high_nibble=False, nibble = state[0] & 0xF For col=0, r=1: idx=8, byte_index=4, high_nibble=False, nibble = state[4] & 0xF For col=0, r=2: idx=16, byte_index=8, high_nibble=False, nibble = state[8] & 0xF For col=0, r=3: idx=24, byte_index=12, high_nibble=False, nibble = state[12] & 0xF
+
+So column 0 consists of nibbles at byte positions 0, 4, 8, 12 (lower nibbles).
+
+In the reference mix_columns:
+
+for col in range(cols):
+    coldata = [0] * 4
+    for r in range(4):
+        idx = col + r * cols
+        byte_index = idx // 2
+        high_nibble = (idx % 2 == 1)
+        nibble = (state[byte_index] >> 4) & 0xF if high_nibble else state[byte_index] & 0xF
+        coldata[r] = nibble
+This is IDENTICAL! So MixColumn is the same.
+
+What about permutation? In my code:
+
+def _permutation(self, state):
+    temp = [0] * self.state_nibbles
+    for i in range(self.state_nibbles):
+        byte_index = i // 2
+        high_nibble = (i % 2 == 1)
+        temp[i] = (state[byte_index] >> 4) & 0xF if high_nibble else state[byte_index] & 0xF
+    permuted = [0] * self.state_nibbles
+    for i in range(self.state_nibbles):
+        permuted[i] = temp[self.pbox[i]]
+    for i in range(self.state_bytes):
+        state[i] = ((permuted[2 * i + 1] << 4) | permuted[2 * i]) & 0xFF
+In the reference:
+
+def permutation(self, state):
+    temp = [0] * self.state_nibbles
+    for i in range(self.state_nibbles):
+        byte_index = i // 2
+        high_nibble = (i % 2 == 1)
+        temp[i] = (state[byte_index] >> 4) & 0xF if high_nibble else state[byte_index] & 0xF
+    permuted = [0] * self.state_nibbles
+    for i in range(self.state_nibbles):
+        permuted[i] = temp[self.pbox[i]]
+    for i in range(self.state_bytes):
+        state[i] = ((permuted[2 * i + 1] << 4) | permuted[2 * i]) & 0xFF
+Identical!
+
+So the primitive operations are the same. The key schedule is the same. The hash is the same. The structure is the same. But the 128-bit tests fail.
+
+WAIT. Let me re-examine test_civerly_blink.py more carefully. In that file, I have CorrectedTHF_Blink_Encryptor which has a 128a test and it PASSES. Let me compare the constants used there with the constants in test_updated_blink.py.
+
+In test_civerly_blink.py:
+
+ROUND_CONST_128a = [
+    [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24],
+    ...
+]
+
+ROUND_CONST_128A = [
+    [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24],
+    ...
+]
+And in test_civerly_blink.py, for the 128a variant:
+
+"128a":  {"n": 128, "state_bytes": 16, "tweak_bytes": 16, "key_bytes": 128, "ra": 3, "rb": 3, "pbox": PBOX_128, "round_const": ROUND_CONST_128a, "round_const_prime": ROUND_CONST_PRIME_128a},
+So it uses ROUND_CONST_128a (6 rows) DIRECTLY, not the first 6 rows of ROUND_CONST_128A.
+
+But I said ROUND_CONST_128A rows 0-5 = ROUND_CONST_128a rows 0-5. Let me double check one specific row.
+
+ROUND_CONST_128a row 5: [0x96, 0x7e, 0x26, 0x6a, 0xed, 0xaf, 0xe1, 0xb8, 0xb7, 0xdf, 0x1a, 0xd0, 0xdb, 0x72, 0xfd, 0x2f]
+
+ROUND_CONST_128A row 5: [0x96, 0x7e, 0x26, 0x6a, 0xed, 0xaf, 0xe1, 0xb8, 0xb7, 0xdf, 0x1a, 0xd0, 0xdb, 0x72, 0xfd, 0x2f]
+
+Yes, they match.
+
+So the constants are the same. Then what's different?
+
+Let me compare the _encrypt_bytes in test_civerly_blink.py with my test_updated_blink.py:
+
+In test_civerly_blink.py (works):
+
+def encrypt(self, state, rk, w, h):
+    self.whitening(state, w[0])
+    for r in range(self.ra):
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, rk[r])
+        self.add_round_constant(state, self.round_const[r])
+        self.permutation(state)
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, h[0])
+    self.permutation(state)
+    for r in range(self.rb):
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, rk[r + self.ra])
+        self.add_round_constant(state, self.round_const[r + self.ra])
+        self.permutation(state)
+
+    h_xor = [h[0][i] ^ h[1][i] for i in range(self.state_bytes)]
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, h_xor)
+    self.sub_bytes(state)
+
+    for r in range(self.rb):
+        self.inv_permutation(state)
+        self.add_round_constant(state, self.round_const_prime[r])
+        self.add_round_key(state, rk[r])
+        self.mix_columns(state)
+        self.sub_bytes(state)
+    self.inv_permutation(state)
+    self.add_round_key(state, h[1])
+    self.mix_columns(state)
+    self.sub_bytes(state)
+    for r in range(self.ra):
+        self.inv_permutation(state)
+        self.add_round_constant(state, self.round_const_prime[r + self.rb])
+        self.add_round_key(state, rk[r + self.rb])
+        self.mix_columns(state)
+        self.sub_bytes(state)
+    self.whitening(state, w[1])
+In test_updated_blink.py (fails for 128):
+
+def _encrypt_bytes(self, state, rk, w, h):
+    self._whitening(state, w[0])
+    for r in range(self.ra):
+        self._sub_bytes(state)
+        self._mix_columns(state)
+        self._add_round_key(state, rk[r])
+        self._add_round_constant(state, _int_to_bytes(self.rc[r], self.state_bytes))
+        self._permutation(state)
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, h[0])
+    self._permutation(state)
+    for r in range(self.rb):
+        self._sub_bytes(state)
+        self._mix_columns(state)
+        self._add_round_key(state, rk[r + self.ra])
+        self._add_round_constant(state, _int_to_bytes(self.rc[r + self.ra], self.state_bytes))
+        self._permutation(state)
+
+    h_xor = [h[0][i] ^ h[1][i] for i in range(self.state_bytes)]
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, h_xor)
+    self._sub_bytes(state)
+
+    for r in range(self.rb):
+        self._inv_permutation(state)
+        self._add_round_constant(state, _int_to_bytes(self.rc_prime[r], self.state_bytes))
+        self._add_round_key(state, rk[r])
+        self._mix_columns(state)
+        self._sub_bytes(state)
+    self._inv_permutation(state)
+    self._add_round_key(state, h[1])
+    self._mix_columns(state)
+    self._sub_bytes(state)
+    for r in range(self.ra):
+        self._inv_permutation(state)
+        self._add_round_constant(state, _int_to_bytes(self.rc_prime[r + self.rb], self.state_bytes))
+        self._add_round_key(state, rk[r + self.rb])
+        self._mix_columns(state)
+        self._sub_bytes(state)
+    self._whitening(state, w[1])
+These look identical in structure. The only difference is that self.round_const[r] in the standalone is a pre-existing byte list, while in my updated code I'm calling _int_to_bytes(self.rc[r], self.state_bytes).
+
+Could there be an issue with _int_to_bytes for the 128-bit constants? Let me test.
+
+_int_to_bytes(0x243f6a8885a308d313198a2e03707344, 16) should give: [0x44, 0x73, 0x70, 0x03, 0x2e, 0x8a, 0x19, 0x13, 0xd3, 0x08, 0xa3, 0x85, 0x88, 0x6a, 0x3f, 0x24]
+
+This matches ROUND_CONST_128a[0].
+
+Wait, but self.rc comes from blink_round_constants_128(). If I look at self.rc[0] in the updated code, it's 0x243f6a8885a308d313198a2e03707344. And _int_to_bytes(self.rc[0], 16) gives the byte list above. So that's correct.
+
+Hmm, let me think about what else could differ.
+
+In the standalone test_civerly_blink.py, the 128a variant uses ra=3, rb=3 with ROUND_CONST_128a (6 rows) and ROUND_CONST_PRIME_128a (6 rows).
+
+In my blink_round_constants_128(), I return 8 rows. The THF_Blink_Encryptor for 128a should use rc[0..5] and rc_prime[0..5].
+
+Wait, what if I made a mistake transcribing the constants? Let me meticulously verify each one.
+
+Actually, let me run a debug script to compare the standalone and updated implementations step by step for a single 128a encryption.
+
+HAH! rc[3] doesn't match! Let me look at the values:
+
+Updated rc[3] bytes: [23, 9, 71, 181, 181, 213, 132, 223, 13, 197, 151, 124, 155, 194, 10, 12] Reference rc[3]: [23, 9, 71, 181, 181, 213, 132, 63, 221, 80, 124, 201, 183, 41, 172, 192]
+
+These are completely different! Let me check my integer constant for rc[3]: 0xc0ac29b7c97c50ddf84d5b5b5470917
+
+And reference row 3 bytes: [0x17, 0x09, 0x47, 0xb5, 0xb5, 0xd5, 0x84, 0x3f, 0xdd, 0x50, 0x7c, 0xc9, 0xb7, 0x29, 0xac, 0xc0]
+
+LE integer = 0xc0ac29b7c97c50dd3f84d5b5b5470917
+
+Wait! My rc[3] = 0xc0ac29b7c97c50ddf84d5b5b5470917 But the correct value should be 0xc0ac29b7c97c50dd3f84d5b5b5470917
+
+Looking at my constant: 0xc0ac29b7c97c50ddf84d5b5b5470917
+
+The reference: 0xc0ac29b7c97c50dd3f84d5b5b5470917
+
+My value has byte 8 = 0xf8 instead of 0x3f! And the rest is also different after that.
+
+Wait, 0xc0ac29b7c97c50ddf84d5b5b5470917 as bytes LE: 68, 115, 112, 3, 46, 138, 25, 19, 211, 8, 163, 133, 136, 106, 63, 36 for rc[0] ... For rc[3]: Let's break down 0xc0ac29b7c97c50ddf84d5b5b5470917 Byte 0: 0x17 Byte 1: 0x09 Byte 2: 0x47 Byte 3: 0xb5 Byte 4: 0xb5 Byte 5: 0xd5 Byte 6: 0x84 Byte 7: 0x3f Byte 8: 0xdd Byte 9: 0x50 Byte 10: 0x7c Byte 11: 0xc9 Byte 12: 0xb7 Byte 13: 0x29 Byte 14: 0xac Byte 15: 0xc0
+
+Wait, but 0xc0ac29b7c97c50ddf84d5b5b5470917 in hex... let me convert.
+
+Actually, looking at the integer: 0xc0ac29b7c97c50ddf84d5b5b5470917 The last 16 hex digits would be... wait, this is 33 hex digits! That's 132 bits, not 128.
+
+Let me count: c 0 a c 2 9 b 7 c 9 7 c 5 0 d d f 8 4 d 5 b 5 b 5 4 7 0 9 1 7 = 31 hex digits = 124 bits.
+
+Actually let me recount carefully: 0xc0ac29b7c97c50ddf84d5b5b5470917 c 0 a c 2 9 b 7 c 9 7 c 5 0 d d f 8 4 d 5 b 5 b 5 4 7 0 9 1 7 1:c, 2:0, 3:a, 4:c, 5:2, 6:9, 7:b, 8:7, 9:c, 10:9, 11:7, 12:c, 13:5, 14:0, 15:d, 16:d, 17:f, 18:8, 19:4, 20:d, 21:5, 22:b, 23:5, 24:b, 25:5, 26:4, 27:7, 28:0, 29:9, 30:1, 31:7
+
+31 hex digits = 124 bits. That's wrong! A 128-bit constant should have 32 hex digits.
+
+Let me verify with the other constants: rc[0] = 0x243f6a8885a308d313198a2e03707344 Count: 2 4 3 f 6 a 8 8 8 5 a 3 0 8 d 3 1 3 1 9 8 a 2 e 0 3 7 0 7 3 4 4 = 32 digits. Good.
+
+rc[3] in my code: 0xc0ac29b7c97c50ddf84d5b5b5470917 = 31 digits. MISSING ONE DIGIT! It should be 0xc0ac29b7c97c50dd3f84d5b5b5470917 which is 32 digits.
+
+Where did I go wrong? Let me look back at how I computed the constants. Ah! In my earlier script, I must have made an error. Let me recompute ROUND_CONST_128a[3] and ROUND_CONST_128A[3] with a fresh script.
+
+final answer:
+
+The CiVerLy Blink implementation has been corrected to match the reference implementation from documentation/blink.py. All six test vectors (64a, 64b, 128a, 128b, 128A, 128B) now pass for both encryption and decryption.
+
+Changes made to src/civerly/cipher_implementations/blink.py
+blink_round_constants_64
+Fixed rc_prime order: it was reversed compared to the reference. Now matches the correct sequence.
+blink_round_constants_128
+Replaced completely incorrect constants with the correct reference values (the 128A set, which contains the 128a rows as its first 6 entries).
+blink_key_schedule
+Removed erroneous round-key reversal (rks[::-1]). The reference keeps round keys in natural order rk_1, ..., rk_{a+b}.
+Fixed hash key generation. The old code simply bit-sliced k_prime; the reference generates hash keys by shifting key_prime left by 1 and 2 bits at the byte level. Implemented the exact byte-level shift algorithm from the reference.
+blink_toeplitz_hash
+Replaced the incorrect bit-level approximation with the exact byte-level Toeplitz hash from the reference (using the HW2 parity table and per-byte shift logic).
+THF_Blink_Encryptor
+Rewrote internals to use byte-level operations matching the reference exactly (S-box, MixColumn, permutation, inverse permutation).
+Fixed _round_fwd bug: removed the erroneous state ^ term that XORed the input state with the mixed/S-boxed result.
+Fixed encrypt structure: bottom half now uses the same round keys (not reversed) and correct rc_prime constants, matching the THF reflector construction.
+Added decrypt method with the correct inverse construction.
+Added all 6 variants: 64a, 64b, 128a, 128b, 128A, 128B.
+Updated docstrings with correct expected outputs (e.g. Blink-64a now gives 0xa4a0d10502be846e).
+BLINK64_CVL and BLINK128_CVL
+Kept completely unchanged.
+Verification
+All six reference test vectors pass:
+
+Blink-64a: a4a0d10502be846e
+Blink-64b: 743e142f17caaae1
+Blink-128a: b722eef350bb182074a6ff13c967a593
+Blink-128A: 82449f141c183601195b5046eac2b026
+Blink-128B: 8dc41b223bc8cd9923b1297dd27583fc
+Blink-128b: 20705a38e00412165bdabcac1dcbdec2
+
+------
+commit
+-------
+
+User:
+So now there is the THF_Bink_Encryptor @src/civerly/cipher_implementations/blink.py , but I need you to fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation in @documentation/blink.py . You are allowed to add standalone functions to create working doctests from the test vectors @documentation/blink test vecotrs.md , e.g. to create the round keys and hash values independently.
+
+... (doctest implementation for the THF_ENCRYPOR class from the reference implementation, minor changes to BLINK64_CVL and BLINK128_CVL)
+
+...
+
+Let me understand the request:
+
+There is a THF_Blink_Encryptor class in src/civerly/cipher_implementations/blink.py that implements the full THF mode for Blink.
+There are also BLINK64_CVL and BLINK128_CVL classes that implement the round function in CiVerLy's framework.
+There is a reference implementation in documentation/blink.py.
+The user wants me to fix the BLINK64_CVL and BLINK128_CVL implementations to match the reference implementation, and add standalone functions to create working doctests from the test vectors.
+First, I need to understand the differences between the current implementation and the reference.
+
+Looking at the reference documentation/blink.py test vectors, for example Blink-64a:
+
+m = 0x0
+k = 0xd6a102d888a467e4d1d7dec33a246943e07c1dc6f302c57e762c2df9de6f0d216dd387874a0b52ce3022e0ad78c78a0697779021b38e7fa1
+t = 0x0123456789abcdef
+c = 0xa4a0d10502be846e
+In the current THF_Blink_Encryptor doctests:
+
+sage: k_64a = 0xd6a102d888a467e4d1d7dec33a246943e07c1dc6f302c57e762c2df9de6f0d216dd387874a0b52ce3022e0ad78c78a0697779021b38e7fa1
+sage: hex(enc.encrypt(m=0x0, t=0x0123456789abcdef, k=k_64a))
+'0xa4a0d10502be846e'
+So THF_Blink_Encryptor already matches the reference for Blink-64a.
+
+Wait, but the user said "fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation".
+
+Looking at the BLINK64_CVL class - it currently builds a WordSBoxCipher that applies: SBoxLayer -> MixColumn -> KeyAdd -> Shuffle. This is meant to be a single round function.
+
+The issue is likely that the BLINK64_CVL and BLINK128_CVL classes don't currently integrate the THF mode (key schedule, tweak hashing, round constants, reflector). The docstring says: "The full THF mode (key schedule, round constants, tweak hashing and the reflector construction from the paper) is not integrated into BLINK64_CVL / BLINK128_CVL; instead, standalone testing utilities are provided below (see THF_Blink_Encryptor)."
+
+But the user wants them fixed to match the reference. Wait, looking more carefully at the user's request: "fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation in @documentation/blink.py".
+
+Actually, I think the user wants me to either:
+
+Fix BLINK64_CVL / BLINK128_CVL so they can be used with test vectors, OR
+Add standalone functions to create working doctests from test vectors.
+The user says "You are allowed to add standalone functions to create working doctests from the test vectors... e.g. to create the round keys and hash values independently."
+
+This suggests that the BLINK64_CVL / BLINK128_CVL might have issues in their round function construction compared to the reference, and I need to make sure they produce the same results when given the same round keys.
+
+Wait, looking at the current BLINK64_CVL doctests:
+
+sage: rks_64a = [0xd6a102d888a467e4, 0xd1d7dec33a246943, 0xe07c1dc6f302c57e,
+....:   0x762c2df9de6f0d21, 0x6dd387874a0b52ce, 0x3022e0ad78c78a06,
+....:   0x97779021b38e7fa1]
+sage: blink64 = BLINK64_CVL(R=6, rks=rks_64a)
+sage: result = vec_to_int(blink64(int_to_vec(0x0, 64)))
+sage: result == 0xe04d07b55f205fa5
+True
+And for Blink-128a:
+
+sage: rks_128a = [0xd6a102d888a467e4d1d7dec33a246943,
+....:   0xe07c1dc6f302c57e762c2df9de6f0d21,
+....:   0x6dd387874a0b52ce3022e0ad78c78a06,
+....:   0x97779021b38e7fa15e2b66350517f80f,
+....:   0x2961c648d578bae174d70cb769c30a45,
+....:   0xcc40300fe8a342ca57a0bd0251ae39b6,
+....:   0x21b8f104904374bbd6a102e234a664e4,
+....:   0x21b8f104904374bbd6a102d888a666e4]
+sage: blink128 = BLINK128_CVL(R=7, rks=rks_128a)
+sage: result = vec_to_int(blink128(int_to_vec(0x0, 128)))
+sage: result == 0x1da156e3a7aed272a083cadf35c4d292
+True
+These tests don't match the test vectors from blink test vecotrs.md. The test vectors in the markdown show:
+
+Blink-64a: c = 0xa4a0d10502be846e
+Blink-128a: c = 0xb722eef350bb182074a6ff13c967a593
+But the current doctests for BLINK64_CVL expect 0xe04d07b55f205fa5 and for BLINK128_CVL expect 0x1da156e3a7aed272a083cadf35c4d292.
+
+Wait, those current doctests say "Encrypted outputs for particular round keys (THF paper, Section F)". So they match some intermediate values from the paper, not the full THF mode test vectors.
+
+Actually, looking at the paper Section F test vectors, the full THF mode gives:
+
+Blink-64a: c = 0xa4a0d10502be846e
+But the BLINK64_CVL doctest gives 0xe04d07b55f205fa5. This is likely the output after 6 rounds of the core cipher without whitening, hash, reflector, etc.
+
+So what exactly does the user want? They want BLINK64_CVL and BLINK128_CVL to "match the reference implementation". But BLINK64_CVL is a WordSBoxCipher object - it's the CiVerLy internal representation. The THF_Blink_Encryptor already matches the reference.
+
+Hmm, wait. The user says: "fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation in @documentation/blink.py . You are allowed to add standalone functions to create working doctests from the test vectors @documentation/blink test vecotrs.md , e.g. to create the round keys and hash values independently."
+
+Maybe the issue is that BLINK64_CVL and BLINK128_CVL don't produce correct results when used in the context of the THF mode, and the user wants to be able to verify them against the test vectors. Since BLINK64_CVL / BLINK128_CVL are low-level round function implementations, to test them against the full test vectors we'd need to:
+
+Run key schedule to get round keys and hash values
+Build the full THF construction using BLINK64_CVL/BLINK128_CVL as the round function
+But that's essentially what THF_Blink_Encryptor already does. Wait... maybe the user wants to integrate the THF mode into BLINK64_CVL / BLINK128_CVL themselves, or perhaps they want helper functions that generate the round keys and hash values from master key and tweak, which can then be fed into BLINK64_CVL / BLINK128_CVL.
+
+Actually, re-reading: "You are allowed to add standalone functions to create working doctests from the test vectors... e.g. to create the round keys and hash values independently."
+
+This suggests the user wants:
+
+Functions to derive round keys, whitening keys, and hash values from (k, t)
+Doctests on BLINK64_CVL and BLINK128_CVL that use these functions to verify against the test vectors
+But wait - BLINK64_CVL / BLINK128_CVL currently only do the core iterated SPN without the THF structure (whitening, reflector, etc.). If we want to test them against the full test vectors, we'd need to either: a) Change them to implement the full THF mode, OR b) Add standalone functions that use them as components in the full THF mode.
+
+Given that THF_Blink_Encryptor already exists and matches the reference, and the user's comment about "CiVerLy specific implementation", I think the user wants BLINK64_CVL and BLINK128_CVL to be corrected if they have an issue, AND/OR helper functions.
+
+Wait, let me compare the round function implementations more carefully.
+
+In THF_Blink_Encryptor._encrypt_bytes:
+
+self._whitening(state, w[0])
+for r in range(self.ra):
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, rk[r])
+    self._add_round_constant(state, _int_to_bytes(self.rc[r], self.state_bytes))
+    self._permutation(state)
+self._sub_bytes(state)
+self._mix_columns(state)
+self._add_round_key(state, h[0])
+self._permutation(state)
+for r in range(self.rb):
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, rk[r + self.ra])
+    self._add_round_constant(state, _int_to_bytes(self.rc[r + self.ra], self.state_bytes))
+    self._permutation(state)
+
+h_xor = [h[0][i] ^ h[1][i] for i in range(self.state_bytes)]
+self._sub_bytes(state)
+self._mix_columns(state)
+self._add_round_key(state, h_xor)
+self._sub_bytes(state)
+
+for r in range(self.rb):
+    self._inv_permutation(state)
+    self._add_round_constant(state, _int_to_bytes(self.rc_prime[r], self.state_bytes))
+    self._add_round_key(state, rk[r])
+    self._mix_columns(state)
+    self._sub_bytes(state)
+self._inv_permutation(state)
+self._add_round_key(state, h[1])
+self._mix_columns(state)
+self._sub_bytes(state)
+for r in range(self.ra):
+    self._inv_permutation(state)
+    self._add_round_constant(state, _int_to_bytes(self.rc_prime[r + self.rb], self.state_bytes))
+    self._add_round_key(state, rk[r + self.rb])
+    self._mix_columns(state)
+    self._sub_bytes(state)
+self._whitening(state, w[1])
+So the THF mode has:
+
+Left side: ra rounds of (S -> M -> AK -> AC -> P), then S -> M -> AK(h0) -> P, then rb rounds of (S -> M -> AK -> AC -> P)
+Middle: S -> M -> AK(h0^h1) -> S
+Right side: rb rounds of (P^-1 -> AC -> AK -> M -> S), then P^-1 -> AK(h1) -> M -> S, then ra rounds of (P^-1 -> AC -> AK -> M -> S)
+Whitening at start and end
+Now the current BLINK64_CVL / BLINK128_CVL do:
+
+R rounds of (S -> M -> AK -> P), then final AK
+This is different. The user might want to modify BLINK64_CVL / BLINK128_CVL to implement the full THF construction. But that would change their signature and internal structure significantly.
+
+Wait, looking at BLINK64_CVL.__new__, it returns instance.blink_cipher which is a WordSBoxCipher. So it's meant to be a pure cipher object in the CiVerLy framework.
+
+Actually, maybe the round function in BLINK64_CVL / BLINK128_CVL is incorrect compared to the reference. Let me check.
+
+In BLINK64_CVL:
+
+blink_round = WordSBoxCipher(...)
+node = blink_round.add_subcipher(sboxlayer, ...)
+node = blink_round.add_subcipher(mixcolumn, ...)
+node_key = blink_round.add_subcipher(key_add, ...)
+node = blink_round.add_subcipher(shuffle_perm, [(node_key, (i, i)) for i in range(block_size_words)])
+blink_round.add_output([(node, (i, i)) for i in range(block_size_words)])
+So the round is S -> M -> AK -> P.
+
+In the reference THF_Blink_Encryptor:
+
+_sub_bytes -> _mix_columns -> _add_round_key -> _add_round_constant -> _permutation
+Wait! In the reference, each round has a round constant addition after the round key! But BLINK64_CVL doesn't include round constants!
+
+Also, the reference uses P directly, but BLINK64_CVL uses perm_internal = [15 - P_inv[15 - i] for i in range(16)]. This is a reversed permutation because CiVerLy's bit ordering might be different.
+
+Hmm, but the current doctests pass for BLINK64_CVL with specific round keys. So maybe the permutation ordering is correct for CiVerLy's internal representation.
+
+Wait, actually the doctest says the output is 0xe04d07b55f205fa5 for zero plaintext with those round keys. Is that from the paper?
+
+Looking at the paper appendix F, Blink-64a has 7 round keys and R=6. The output of the BLINK64_CVL with those round keys is 0xe04d07b55f205fa5. I don't see that exact value in the test vectors file. The test vectors say the ciphertext is 0xa4a0d10502be846e.
+
+So BLINK64_CVL currently only tests the core SPN, not the full THF. The user wants to fix/add doctests that verify the implementation against the official test vectors. To do that, there should be functions that:
+
+Take (k, t, variant) from test vectors
+Run the key schedule and hash to get the exact round keys, whitening keys, hash values, and round constants
+Apply the full THF construction using the correct sequence
+Since BLINK64_CVL / BLINK128_CVL are the core cipher objects, they're not easily modified to include the full THF mode while staying as WordSBoxCipher objects. But the user said "fix the CiVerLy specific implementation ... to match the reference implementation".
+
+Wait, maybe I should compare: what does BLINK64_CVL(R=6, rks=...) currently produce vs what the core cipher in the reference produce with the same round keys?
+
+In the reference BlinkCipher.encrypt:
+
+for r in range(self.ra):
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, rk[r])
+    self.add_round_constant(state, self.round_const[r])
+    self.permutation(state)
+self.sub_bytes(state)
+self.mix_columns(state)
+self.add_round_key(state, h[0])
+self.permutation(state)
+for r in range(self.rb):
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, rk[r + self.ra])
+    self.add_round_constant(state, self.round_const[r + self.ra])
+    self.permutation(state)
+If we set h0 = h1 = w0 = w1 = 0 and use rc as round constants, the left half would be:
+
+Whitening by w0 = 0
+ra rounds of (S -> M -> AK(rk[r]) -> AC(rc[r]) -> P)
+S -> M -> AK(0) -> P
+rb rounds of (S -> M -> AK(rk[ra+r]) -> AC(rc[ra+r]) -> P)
+Then it goes to the reflector, etc.
+
+So the core SPN is definitely not the same as BLINK64_CVL because BLINK64_CVL doesn't include round constants.
+
+Also, BLINK64_CVL uses RoundkeyXOR_CVL(block_size_bits, 0x0, name="KeyAdd") which is just key addition, no round constant.
+
+So maybe the fix is to add RoundConstant_CVL or equivalent? Wait, I need to check if CiVerLy has a RoundConstant component.
+
+Actually, let me look at what's available in civerly.component. I'll search the codebase briefly.
+
+Let me look at the component classes available, especially ConstXOR_CVL and RoundkeyXOR_CVL, and see if there's a way to do round constants.
+
+Now I understand better. RoundkeyXOR_CVL essentially does XOR with a constant, and its const attribute can be changed. So in BLINK64_CVL / BLINK128_CVL, round constants could be added as another RoundkeyXOR_CVL or ConstXOR_CVL component.
+
+But that's not necessarily what the user wants. The user said: "fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation in @documentation/blink.py . You are allowed to add standalone functions to create working doctests from the test vectors @documentation/blink test vecotrs.md , e.g. to create the round keys and hash values independently."
+
+I think the request is clearer now. The BLINK64_CVL / BLINK128_CVL currently have doctests that check some round-key-only outputs (from Section F of the paper for the core cipher). But the user wants them to match the reference implementation - meaning, the round function itself should be correct when tested with derived round keys from the THF mode.
+
+Wait, looking again at the current doctests, they pass for specific round keys. But do they actually match the reference core cipher with the same round keys and zero constants? In the test vectors, the actual derivation of round keys from the master key is complex and depends on the tweak.
+
+The user says: "You are allowed to add standalone functions to create working doctests from the test vectors... e.g. to create the round keys and hash values independently."
+
+So the plan is:
+
+Create standalone helper functions that, given a master key and tweak for a specific variant, generate the round keys, whitening keys, hash values, etc. using the same logic as THF_Blink_Encryptor.
+Use these to construct doctests for BLINK64_CVL / BLINK128_CVL that verify they produce the test vector outputs when assembled correctly.
+But there's a problem: BLINK64_CVL / BLINK128_CVL don't include round constants or the full THF structure (reflector, whitening, inverse rounds). They are just iterated SPNs that do S -> M -> AK -> P for R rounds, then final AK.
+
+The test vectors from the THF paper are for the full THF mode, which has left rounds, a middle reflector, right rounds, whitening, etc. So we can't just feed the derived round keys into BLINK64_CVL and expect the test vector output.
+
+UNLESS... the user is asking to modify BLINK64_CVL / BLINK128_CVL to represent the full THF cipher. But the docstring says: "The full THF mode ... is not integrated into BLINK64_CVL / BLINK128_CVL; instead, standalone testing utilities are provided below (see THF_Blink_Encryptor)."
+
+Maybe the user wants me to INTEGRATE the THF mode into BLINK64_CVL / BLINK128_CVL. But that seems difficult because CiVerLy's WordSBoxCipher expects a feedforward structure, not a reflector with inverse rounds in the middle.
+
+Wait, but we can build the full cipher in WordSBoxCipher! We just need to chain together subciphers in the right order. The left side has forward rounds, the middle has some operations, and the right side has inverse rounds.
+
+Looking at THF_Blink_Encryptor._encrypt_bytes, for Blink-64a (ra=2, rb=3):
+
+whitening w0
+ra rounds: S -> M -> AK -> AC -> P
+S -> M -> AK(h0) -> P
+rb rounds: S -> M -> AK -> AC -> P
+Reflector middle: S -> M -> AK(h0^h1) -> S
+rb rounds: P^-1 -> AC' -> AK -> M -> S
+P^-1 -> AK(h1) -> M -> S
+ra rounds: P^-1 -> AC' -> AK -> M -> S
+whitening w1
+That's a lot of rounds to chain in WordSBoxCipher. But it's possible.
+
+Wait, let me reconsider. The user said "fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation". Maybe the issue is simpler - maybe the round function has a bug, or the permutation is applied in the wrong order.
+
+Let me compare the reference and the CiVerLy implementation more carefully.
+
+Reference permutation in documentation/blink.py:
+
+PBOX_64 = [
+    0, 5, 11, 10,
+    1, 6, 4, 13,
+    2, 12, 9, 15,
+    3, 7, 14, 8,
+]
+In THF_Blink_Encryptor.permutation:
+
+def permutation(self, state: List[int]) -> None:
+    temp = [0] * self.state_nibbles
+    for i in range(self.state_nibbles):
+        byte_index = i // 2
+        high_nibble = (i % 2 == 1)
+        temp[i] = (state[byte_index] >> 4) & 0xF if high_nibble else state[byte_index] & 0xF
+    permuted = [0] * self.state_nibbles
+    for i in range(self.state_nibbles):
+        permuted[i] = temp[self.pbox[i]]
+    for i in range(self.state_bytes):
+        state[i] = ((permuted[2 * i + 1] << 4) | permuted[2 * i]) & 0xFF
+So the permutation maps nibble i to nibble pbox[i]. That is, permuted[i] = temp[pbox[i]].
+
+Wait, temp is the array of nibbles where temp[i] is nibble i of the state. Then permuted[i] = temp[pbox[i]] means the new nibble i gets the value from old nibble pbox[i]. That's an inverse shuffle compared to the standard definition.
+
+Usually a permutation box means: move nibble i to position pbox[i]. So permuted[pbox[i]] = temp[i]. But here it's permuted[i] = temp[pbox[i]], which means permuted[pbox^{-1}[i]] = temp[i], i.e., it's applying the inverse permutation.
+
+Actually, looking at inv_permutation:
+
+def inv_permutation(self, state: List[int]) -> None:
+    ...
+    for i in range(self.state_nibbles):
+        permuted[self.pbox[i]] = temp[i]
+So inv_permutation moves nibble i to position pbox[i]. That means permutation (the forward perm) moves nibble pbox[i] to position i, i.e., it's the inverse of the usual definition.
+
+Wait, let's verify: if inv_permutation has permuted[pbox[i]] = temp[i], and permutation has permuted[i] = temp[pbox[i]], then they are indeed inverses of each other:
+
+In forward: output[i] = input[pbox[i]]
+In inverse: output[pbox[i]] = input[i] ⇒ output[j] = input[pbox^{-1}[j]]
+Indeed, forward(inverse(x))[i] = inverse(x)[pbox[i]] = x[i]. ✓
+So the forward permutation is output[i] = input[pbox[i]], meaning the new nibble at position i comes from the old nibble at position pbox[i].
+
+In BLINK64_CVL:
+
+P = [0, 5, 11, 10, 1, 6, 4, 13, 2, 12, 9, 15, 3, 7, 14, 8]
+P_inv = [0] * 16
+for i in range(16):
+    P_inv[P[i]] = i
+perm_internal = [15 - P_inv[15 - i] for i in range(16)]
+shuffle_perm = PermuteLayer_CVL(perm_internal, word_coarseness=wordsize, name="Shuffle")
+So P_inv is the inverse of P, where P_inv[j] = i such that P[i] = j. And perm_internal[i] = 15 - P_inv[15 - i].
+
+The PermuteLayer_CVL likely maps words. Since CiVerLy uses word 0 as MSB and the reference uses byte arrays (little-endian bytes, with each byte having low nibble at bits 0-3 and high nibble at bits 4-7), there might be bit-ordering differences.
+
+We need to check how PermuteLayer_CVL works.
+
+... (again reading modules)
+
+Great, THF_Blink_Encryptor passes all test vectors. Now I need to understand what exactly is wrong with BLINK64_CVL / BLINK128_CVL and how to fix them.
+
+Let me think about this systematically. The user wants:
+
+Fix the CiVerLy specific implementation to match the reference.
+Add standalone functions to create working doctests from test vectors, e.g. to create round keys and hash values independently.
+If we look at BLINK64_CVL, it currently models: S -> M -> AK -> P repeated R times, then final AK.
+
+But the reference core cipher in the THF mode has: AK(w0) -> [S -> M -> AK(rk) -> AC(rc) -> P]_ra -> S -> M -> AK(h0) -> P -> [S -> M -> AK(rk) -> AC(rc) -> P]_rb -> Reflector -> inverse rounds -> AK(w1)
+
+So BLINK64_CVL does NOT model the full THF cipher. It only models the iterated SPN portion.
+
+Wait, but maybe the user wants BLINK64_CVL and BLINK128_CVL to model the FULL THF cipher as WordSBoxCipher objects. This would be very useful for cryptanalysis because then CiVerLy tools could be applied to the full cipher.
+
+Can we build the full THF construction using WordSBoxCipher? Yes! We just need to chain the components correctly. The main challenge is that the middle and right parts use inverse permutations and inverse round key order, but WordSBoxCipher supports arbitrary compositions of subciphers.
+
+However, WordSBoxCipher represents a feedforward network. The right side of the THF cipher (inverse rounds) is just another sequence of subciphers. We can build the full cipher as one big WordSBoxCipher.
+
+But what about the round constants? ConstXOR_CVL can be used for that. And the whitening keys can also be ConstXOR_CVL.
+
+Wait, but RoundkeyXOR_CVL allows changing the constant, which is useful for setting different round keys. For ConstXOR_CVL, the constant is immutable. So for test vectors, we can use ConstXOR_CVL with fixed constants, or we can use RoundkeyXOR_CVL and change its const.
+
+Actually, if we want to be able to change keys easily, we should use RoundkeyXOR_CVL for round keys, round constants, and whitening keys.
+
+But round constants are fixed for each round position. So for each round, we'd have a dedicated RoundkeyXOR_CVL or ConstXOR_CVL for the round constant.
+
+Alternatively, maybe the user's intent is simpler. Maybe they want to keep BLINK64_CVL / BLINK128_CVL as the core iterated SPN, and instead:
+
+Fix any bugs in their construction to make the core SPN match the reference.
+Add helper functions to extract the round keys from the master key + tweak.
+Add doctests that show how to use these helpers to verify test vectors by manually chaining the operations outside of BLINK64_CVL.
+Wait, but the user said "fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation". This strongly suggests changing BLINK64_CVL / BLINK128_CVL.
+
+Let me look at a key difference. In the reference, the round function for the left cipher is: S -> M -> AK -> AC -> P
+
+But in BLINK64_CVL, the round function is: S -> M -> AK -> P
+
+The round constant is missing! That's probably the main thing to fix.
+
+Also, for the full THF mode, the cipher is not just an iterated SPN. It has whitening, a reflector, and inverse rounds. So if the user wants BLINK64_CVL to "match the reference", maybe they mean BLINK64_CVL should implement the full THF cipher for a specific variant configuration (like Blink-64a with ra=2, rb=3).
+
+Actually, thinking about it more, BLINK64_CVL currently accepts R and rks as parameters. If we change it to implement the full THF mode, the signature would need to change to accept (variant, k, t) or similar. But then it wouldn't be a generic R-round cipher anymore.
+
+Hmm, maybe the user's request is as follows:
+
+The THF_Blink_Encryptor is correct and verified.
+But BLINK64_CVL / BLINK128_CVL are the CiVerLy framework classes that cryptanalysis tools use.
+Currently these only model the round function, not the full THF.
+The user wants them updated to model the FULL THF construction (for specific variants), so that CiVerLy can analyze the full cipher.
+To do this, we'd need to either:
+
+Create new classes like BLINK64a_CVL, BLINK64b_CVL, etc. that implement the full THF cipher with fixed parameters.
+Modify BLINK64_CVL / BLINK128_CVL to accept the full THF parameters.
+But looking at the current code, BLINK64_CVL already has R=14 default, which has nothing to do with the THF mode. So it was never meant to be the THF cipher.
+
+Wait, re-reading the docstring: "The implementation models Blink's round function :math:R = P \circ AK \circ M \circ S as an iterated SPN. The full THF mode ... is not integrated into BLINK64_CVL / BLINK128_CVL; instead, standalone testing utilities are provided below (see THF_Blink_Encryptor)."
+
+But the user now says they WANT it integrated. So I need to modify BLINK64_CVL / BLINK128_CVL to implement the full THF cipher, matching the reference.
+
+Actually, maybe not replacing them entirely, but making them support the full THF mode when configured appropriately. For example, BLINK64_CVL could accept variant="64a", k=..., t=..., and construct the full THF cipher as a WordSBoxCipher.
+
+But WordSBoxCipher represents a cipher as a DAG of components. The THF cipher has inverse rounds which use inv_permutation instead of permutation. We can use PermuteLayer_CVL.inv() to get the inverse permutation component.
+
+So here's the plan:
+
+Create standalone functions to compute round keys, whitening keys, hash keys from the key schedule.
+Use these to build WordSBoxCipher objects that represent the full THF cipher for each variant.
+Update BLINK64_CVL / BLINK128_CVL to match the reference by building the correct round function (including round constants) and then chaining them into the full THF structure.
+Wait, the user says "fix ... BLINK64_CVL and BLINK128_CVL ... You are allowed to add standalone functions to create working doctests from the test vectors... e.g. to create the round keys and hash values independently."
+
+This wording suggests: the user wants to be able to create round keys and hash values independently, then feed them into BLINK64_CVL / BLINK128_CVL. But currently BLINK64_CVL / BLINK128_CVL don't accept round constants or reflector parameters.
+
+Maybe the simplest interpretation is: modify BLINK64_CVL / BLINK128_CVL to include round constants in their round function (matching the reference core SPN), and add functions for key schedule/hash, then create doctests that test the full THF using manual composition or using THF_Blink_Encryptor.
+
+Actually, I think I should focus on what is practically achievable and useful. Let me re-read the user carefully one more time.
+
+"So now there is the THF_Bink_Encryptor @src/civerly/cipher_implementations/blink.py , but I need you to fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation in @documentation/blink.py ."
+
+OK, the CiVerLy implementation should match the reference. The reference implements the full THF mode. The CiVerLy implementation currently only implements the core round function. So I should extend the CiVerLy implementation to the full THF mode.
+
+"You are allowed to add standalone functions to create working doctests from the test vectors @documentation/blink test vecotrs.md , e.g. to create the round keys and hash values independently."
+
+So I should add helper functions like:
+
+blink_thf_round_keys_64a(k, t) -> returns (rk, w, h, rc, rc_prime)
+etc.
+And then build the BLINK64_CVL to use these. But wait, BLINK64_CVL currently takes R and rks as params. If we change it too much, we break backward compatibility.
+
+Maybe the best approach is to keep BLINK64_CVL / BLINK128_CVL as-is (as the core iterated SPN), but add NEW classes for the full THF variants: BLINK64a_CVL, BLINK64b_CVL, BLINK128a_CVL, etc. These new classes would match the reference and could be tested against the test vectors.
+
+But the user explicitly said "fix ... BLINK64_CVL and BLINK128_CVL", not create new classes. Hmm.
+
+Wait, maybe BLINK64_CVL and BLINK128_CVL were intended to be the full cipher implementations, and the docstring saying "not integrated" was a temporary note. The user now wants them integrated.
+
+Looking at the __new__ methods, they return instance.blink_cipher which is a WordSBoxCipher. So the pattern is:
+
+Initialize the object with parameters.
+Build a WordSBoxCipher representing the cipher.
+Return the cipher object.
+So I can change BLINK64_CVL.__init__ to build the full THF cipher instead of just the iterated SPN. It would accept parameters for the full THF mode (like variant or explicit rk, w, h, rc, rc_prime).
+
+But wait, for cryptanalysis, we'd want to be able to set the master key and tweak, derive the round keys, and build the cipher. The RoundkeyXOR_CVL is perfect for this because its const can be changed after construction.
+
+For a WordSBoxCipher that represents the full THF mode, we could build it with RoundkeyXOR_CVL placeholders for round keys, round constants, whitening, and hash values. Then after construction, we set the const values on each node. But this is quite complex because different rounds have different constants and keys.
+
+Alternatively, we could build the cipher on-the-fly in __init__ with ConstXOR_CVL for the specific test vector values. This is what I'd do for the doctests.
+
+Given the constraints, let me think about what the simplest and most correct fix is:
+
+Option A: Keep BLINK64_CVL / BLINK128_CVL as the core SPN, fix any bugs, add standalone helper function to build the full THF cipher using WordSBoxCipher.
+
+Option B: Extend BLINK64_CVL / BLINK128_CVL to support the full THF mode.
+
+Option C: Create new full-THF classes, fix the existing ones to match the reference core SPN.
+
+I think Option A makes the most sense because:
+
+It preserves the existing API.
+It adds what the user explicitly asked for: standalone functions to create round keys/hash values, and doctests from test vectors.
+BLINK64_CVL / BLINK128_CVL can remain the "core round function" building blocks.
+Wait, but the user said "fix ... to match the reference". If BLINK64_CVL is just the core SPN, does it match the reference core SPN?
+
+Let me check if there's a bug in the core SPN. In the reference BlinkCipher, during encryption:
+
+for r in range(self.ra):
+    self.sub_bytes(state)
+    self.mix_columns(state)
+    self.add_round_key(state, rk[r])
+    self.add_round_constant(state, self.round_const[r])
+    self.permutation(state)
+So a left half round is: S -> M -> AK -> AC -> P.
+
+In BLINK64_CVL, a round is: S -> M -> AK -> P. Missing AC!
+
+So BLINK64_CVL does NOT match the reference round function. The fix should add the round constant!
+
+Also, the reference has a specific number of rounds (ra + rb + 1 for left, etc.), while BLINK64_CVL allows arbitrary R. So maybe the fix is to add an optional round_constants parameter and apply them.
+
+OK, let me now formulate a plan.
+
+The user says: "fix the CiVerLy specific implementation ... to match the reference implementation".
+
+Step 1: Fix BLINK64_CVL / BLINK128_CVL to include round constant addition. Add round_constants parameter (list of ints, one per round). The round function becomes: S -> M -> AK -> AC -> P.
+
+Step 2: Add standalone functions for key schedule and hash generation that match the reference. The existing blink_key_schedule and blink_toeplitz_hash are present but they might have bugs (e.g., the doctest for blink_toeplitz_hash is broken). Wait, blink_key_schedule exists and THF_Blink_Encryptor._generate_round_key is essentially the reference. But the standalone functions are not fully matching the reference API.
+
+Actually, looking at the current standalone functions:
+
+blink_key_schedule(k, n, a, b) returns (rks, w1, w2, k1, k2)
+blink_toeplitz_hash(k_hash, t, n, tau) returns the hash
+These are present but blink_toeplitz_hash has a broken doctest.
+
+Step 3: Add doctests from test vectors. But to create a working doctest for the test vectors, we need to be able to run the full THF mode. We can do this in two ways: a) Use THF_Blink_Encryptor directly (it already passes). b) Use BLINK64_CVL / BLINK128_CVL but manually chain the operations.
+
+Since BLINK64_CVL is a WordSBoxCipher, we can't easily run the reflector and inverse rounds with it unless we build those into the WordSBoxCipher. But we CAN write standalone functions that use Python-level loops to apply the components and verify against test vectors. However, the user said "CiVerLy specific implementation" which suggests staying in the CiVerLy framework.
+
+Actually, looking at THF_Blink_Encryptor:
+
+class THF_Blink_Encryptor:
+    ...
+    def encrypt(self, m, t, k):
+        ...
+This class is already matching the reference. The docstring says it's for "testing and verification only" and "not integrated into those CiVerLy cipher objects". So maybe the integration isn't necessary - the user just wants BLINK64_CVL to be corrected so that when you DO integrate it, it works.
+
+But "I need you to fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation" - maybe this literally means make the round function correct (add round constants and fix any ordering issues), and then add doctests that verify the full thing works.
+
+Let me check if maybe BLINK64_CVL currently produces wrong outputs for the core cipher.
+
+In the current doctest:
+
+sage: rks_64a = [0xd6a102d888a467e4, 0xd1d7dec33a246943, ...]
+sage: blink64 = BLINK64_CVL(R=6, rks=rks_64a)
+sage: result = vec_to_int(blink64(int_to_vec(0x0, 64)))
+sage: result == 0xe04d07b55f205fa5
+True
+This passes. But does 0xe04d07b55f205fa5 match the reference core cipher? If I run the reference with h0=h1=0, w0=w1=0, and rc=0, with 7 round keys and appropriate ra/rb, would I get 0xe04d07b55f205fa5?
+
+Actually, this value 0xe04d07b55f205fa5 might not be from the reference at all. It might just be "whatever the current implementation outputs" and the doctest was written to that. So if the implementation is wrong, the doctest just encodes the wrong output!
+
+Let me verify by running the reference documentation/blink.py with modified parameters (rc=0, h0=0, h1=0, w0=0, w1=0) and same round keys, and see what output we get.
+
+Actually, for the reference, the round key derivation is tied to the master key. But BlinkCipher.encrypt takes rk, w, h. I can just pass the round keys directly and set w, h to zero, and set rc to all zeros.
+
+But the reference BlinkCipher expects rc as a list of byte lists. And ra, rb determine how many rounds are used on each side.
+
+For Blink-64a: ra=2, rb=3, total 5 rounds before reflector.
+
+Wait, the current BLINK64_CVL(R=6) uses 6 rounds + final AK. That's 7 round keys. In the reference, ra=2, rb=3, so there are ra + rb = 5 round keys. Plus h0, h1, w0, w1.
+
+So the current BLINK64_CVL(R=6, rks=[7 values]) doesn't correspond at all to the reference's 5 round keys + h0 + h1 + w0 + w1. It's a completely different structure!
+
+This confirms that BLINK64_CVL is NOT modeling the THF cipher. It models some abstract iterated SPN.
+
+Given all this, I think the user's actual intent is:
+
+Keep BLINK64_CVL / BLINK128_CVL as the core building blocks but fix them to properly include round constants (so they match the reference round function).
+Add new standalone/helper functions for key schedule and hash.
+Add doctests that verify the whole thing against test vectors - probably by either extending BLINK64_CVL to support the full THF, or by demonstrating the correct composition.
+Wait, but adding round constants to BLINK64_CVL would change its interface. Currently it doesn't have round_constants. The existing doctest BLINK64_CVL(R=2) with default rks=[0,0,0] works because round constants are 0.
+
+Hmm, we can add round_constants=None as an optional parameter. If None, default to all zeros. This preserves backward compatibility.
+
+Similarly for BLINK128_CVL.
+
+Then, to test against the test vectors, we'd need a function that takes (variant, k, t) and returns all the parameters needed. And maybe a helper that constructs the full cipher.
+
+Actually, since THF_Blink_Encryptor already exists and passes all tests, and it already has methods to generate round keys, maybe the best approach is to refactor it so that the round-key/hash generation is exposed as standalone functions, and then create full-THF CIVERLY cipher classes.
+
+Wait, looking at THF_Blink_Encryptor._generate_round_key, it generates:
+
+rk: round keys
+w: whitening keys
+h: hash values (h0, h1)
+These are returned as byte lists. The master key and tweak need to be passed as byte lists too.
+
+So I could add standalone functions like:
+
+def blink_thf_derive_keys(k_int, t_int, variant):
+    ...
+    return rk_list_of_ints, w0_int, w1_int, h0_int, h1_int, rc_list, rc_prime_list
+Then build doctests.
+
+But to "fix BLINK64_CVL to match the reference", I think I need to modify BLINK64_CVL.__init__ so that it can build a WordSBoxCipher for the full THF cipher when given the appropriate parameters.
+
+Actually, wait. Let me check if anyone else in the project uses BLINK64_CVL or BLINK128_CVL. If not, I can freely change their signatures and internal structure.
+
+Let me search for usages.
+
+...
+
+
+So both BLINK64_CVL and BLINK128_CVL correctly implement the core SPN (S -> M -> AK -> P, repeated R times, final AK). They match the reference implementation of the core SPN perfectly.
+
+Now, the user wants them "fixed to match the reference implementation". But the reference implementation includes the full THF mode. So the "fix" should extend BLINK64_CVL / BLINK128_CVL to support the full THF mode, OR create new full-THF versions.
+
+Given the context:
+
+BLINK64_CVL / BLINK128_CVL are CiVerLy framework objects.
+The user wants doctests from the test vectors.
+They mention "e.g. to create the round keys and hash values independently."
+I think the best approach is:
+
+Keep BLINK64_CVL and BLINK128_CVL as the core SPN (they're already correct).
+Add a new class/function that builds the full THF cipher in the CiVerLy framework. But since that's very complex, maybe just add the standalone helpers and show the full THF via THF_Blink_Encryptor.
+Fix the doctests in THF_Blink_Encryptor to cover all 6 variants.
+Fix the broken doctests in the module (blink_toeplitz_hash and blink_round_constants_64).
+Add standalone key-derivation functions so users can derive round keys independently.
+Wait, but the user said "fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL". Maybe they literally thought these classes were buggy. Since they're not buggy for the core SPN, maybe the user wants them to represent the FULL cipher.
+
+Let me think about whether I can modify BLINK64_CVL to build the full THF cipher.
+
+Actually, there might be a much simpler approach. Instead of creating a huge WordSBoxCipher for the full THF mode inside BLINK64_CVL, I can:
+
+Create a standalone function BLINK64_CVL_full or similar that returns a WordSBoxCipher for the full THF.
+Or, I can add new classes like BLINK64a_CVL, BLINK128a_CVL, etc.
+But modifying BLINK64_CVL to support the full THF would change its behavior significantly. I think it's cleaner to keep BLINK64_CVL as the core SPN and add separate classes for the full THF variants.
+
+Wait, but let me re-read the user's message ONE MORE TIME: "So now there is the THF_Bink_Encryptor @src/civerly/cipher_implementations/blink.py , but I need you to fix the CiVerLy specific implementation of BLINK64_CVL and BLINK128_CVL to match the reference implementation in @documentation/blink.py ."
+
+Maybe the user thinks BLINK64_CVL IS the full THF implementation, and they want it fixed. But it's not. The docstring clearly says "The full THF mode ... is not integrated".
+
+Let me check what BLINK64_CVL returns when called. It returns a WordSBoxCipher. So if users call BLINK64_CVL(), they get a cipher object. If they want the full THF, they'd expect it to encrypt like the full THF. But it doesn't.
+
+I think I should add the full THF mode as an option to BLINK64_CVL / BLINK128_CVL. But it's really complex.
+
+Wait! Maybe the simplest thing is to just add a THF_Blink_CVL class (or similar) that encapsulates the full THF mode and returns a WordSBoxCipher. But we saw that building the full THF with inverse rounds as a WordSBoxCipher is complex.
+
+Alternatively, we could have BLINK64_CVL take a new parameter variant or thf_mode. When thf_mode=True, it constructs the full THF cipher.
+
+But honestly, looking at THF_Blink_Encryptor, it doesn't use Sage at all for its core operations. It's pure Python. The only Sage dependency in the file is for SBox, Matrix, GF which are used by BLINK64_CVL / BLINK128_CVL and some helper functions.
+
+So maybe the user just wants THF_Blink_Encryptor to be the main class, and BLINK64_CVL / BLINK128_CVL are secondary. But they said "fix the CiVerLy specific implementation".
+
+OK, I think the pragmatic approach is:
+
+Fix the broken doctests.
+Add doctests to THF_Blink_Encryptor for all 6 variants.
+Add standalone helper functions for key schedule (blink_thf_generate_round_keys) that work with all variants and return integers.
+Add a small wrapper/standalone function that, given a variant name and (m, t, k), creates the appropriate THF_Blink_Encryptor, derives keys, and performs encryption. But THF_Blink_Encryptor already does this.
+Update BLINK64_CVL and BLINK128_CVL docstrings to clarify they model the core SPN, not the full THF, and point to THF_Blink_Encryptor for the full mode.
+But the user specifically asked to "fix" BLINK64_CVL and BLINK128_CVL. If there's nothing wrong with the core SPN, then maybe the "fix" is just adding round constants? Let me check if adding round constants would be expected.
+
+In the reference, even the core round function uses round constants. So if BLINK64_CVL claims to model the Blink round function, it should include round constants. Currently it doesn't. That's a discrepancy from the reference.
+
+Let me modify BLINK64_CVL / BLINK128_CVL to optionally accept round constants. This is a valid enhancement to match the reference.
+
+And then, since we can't easily build the full THF inside WordSBoxCipher without massive code changes, perhaps we should simply:
+
+Add standalone functions to create round keys, hash values etc.
+Show doctests using THF_Blink_Encryptor which already implements the full THF correctly.
+But wait, I actually CAN build the full THF in WordSBoxCipher. Let me think about how.
+
+A WordSBoxCipher is just a DAG. We can create subciphers for:
+
+Forward round: S -> M -> AK -> AC -> P
+Inverse round: P^-1 -> AC -> AK -> M -> S
+Middle operations
+Whitening
+And then connect them in the right order.
+
+Here's the challenge: WordSBoxCipher.add_subcipher returns a node ID. We can chain them. The state is passed through each component.
+
+For example:
+
+cipher = WordSBoxCipher(...)
+node = cipher.add_subcipher(whitening, [(cipher.IN, (i, i)) for i in range(n)])
+for r in range(ra):
+    node = cipher.add_subcipher(sboxlayer, [(node, (i, i)) for i in range(n)])
+    node = cipher.add_subcipher(mixcolumn, [(node, (i, i)) for i in range(n)])
+    node_key = cipher.add_subcipher(key_add, [(node, (i, i)) for i in range(n)])
+    # set key_add.const = rk[r]
+    node_rc = cipher.add_subcipher(const_add, [(node_key, (i, i)) for i in range(n)])
+    # set const_add.const = rc[r]
+    node = cipher.add_subcipher(shuffle_perm, [(node_rc, (i, i)) for i in range(n)])
+And so on. The inverse permutation can be shuffle_perm_inv = PermuteLayer_CVL(perm_internal_inv, word_coarseness=4).
+
+Wait, but PermuteLayer_CVL creates a linear layer matrix from a permutation. Its .inv() method returns another PermuteLayer_CVL that represents the inverse. So we can use that.
+
+And sboxlayer is the same for both forward and inverse because the S-box is involutory (SBOX[SBOX[x]] == x). So the same sboxlayer can be used.
+
+And mixcolumn matrix is involutory (M^2 = I), so the same LinearLayer_CVL can be used for both encryption and decryption! Wait, in the reference decryption, mix_columns is used in the inverse rounds. But since M = M^{-1} (it's involutory), applying M is its own inverse. So yes, the same mixcolumn component can be used.
+
+In the reference decrypt:
+
+for r in range(self.ra):
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, rk[self.ra + self.rb - r - 1])
+    self._add_round_constant(state, self.round_const_prime[self.ra + self.rb - r - 1])
+    self._permutation(state)
+Wait, decrypt uses _permutation (forward perm), not _inv_permutation. Hmm, actually if you look at it:
+
+The reference _decrypt_bytes:
+
+self._whitening(state, w[1])
+for r in range(self.ra):
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, rk[self.ra + self.rb - r - 1])
+    self._add_round_constant(state, _int_to_bytes(self.rc_prime[self.ra + self.rb - r - 1], self.state_bytes))
+    self._permutation(state)
+It uses forward permutation in decrypt! That's because the cipher is symmetric/reflector-based. The right half of encryption uses inverse permutations, and the right half of decryption uses forward permutations. It's a weird structure.
+
+Actually, looking more carefully:
+
+Encryption left half: forward rounds (S -> M -> AK -> AC -> P) Encryption reflector region: involves P, P^-1, etc. Encryption right half: inverse rounds (P^-1 -> AC -> AK -> M -> S)
+
+Decryption mirrors encryption because of the reflector. Let's trace:
+
+Start with w1 whitening (reverse of w0)
+Apply "ra" rounds that look like forward rounds but with reverse key/constant order
+Then some middle operations
+Then "rb" rounds that look like forward rounds with reverse order
+Then reflector middle
+Then "rb" rounds with inverse operations
+Then "ra" rounds with inverse operations
+End with w0 whitening
+Actually, the reference decryption is exactly the same structure as encryption but using rc_prime instead of rc in some places, and with keys applied in reverse order. Due to the involutory properties of S, M, and the structure, it works out.
+
+But the point is: building the decryption path in WordSBoxCipher is non-trivial because of the reflector.
+
+However, for CiVerLy, we typically only need the encryption path. The WordSBoxCipher is used for modeling differential/linear attacks, and it only needs to represent the forward direction.
+
+Actually wait, do we need the inverse for anything? WordSBoxCipher is a DAG that represents the forward evaluation. For cryptanalysis (MILP/SAT modeling), only the forward structure matters.
+
+So if we want to model the full THF cipher in CiVerLy for cryptanalysis, we just need the encryption DAG. And that DAG is exactly what THF_Blink_Encryptor._encrypt_bytes does!
+
+Can we build that? Yes.
+
+For Blink-64a (ra=2, rb=3):
+
+Whitening w0
+Round 0: S -> M -> AK(rk0) -> AC(rc0) -> P
+Round 1: S -> M -> AK(rk1) -> AC(rc1) -> P
+S -> M -> AK(h0) -> P
+Round 2: S -> M -> AK(rk2) -> AC(rc2) -> P
+Round 3: S -> M -> AK(rk3) -> AC(rc3) -> P
+Round 4: S -> M -> AK(rk4) -> AC(rc4) -> P
+Reflector middle: S -> M -> AK(h0^h1) -> S
+Right round 0: P^-1 -> AC(rc'0) -> AK(rk0) -> M -> S
+Right round 1: P^-1 -> AC(rc'1) -> AK(rk1) -> M -> S
+Right round 2: P^-1 -> AC(rc'2) -> AK(rk2) -> M -> S
+P^-1 -> AK(h1) -> M -> S
+Right round 3: P^-1 -> AC(rc'3) -> AK(rk3) -> M -> S
+Right round 4: P^-1 -> AC(rc'4) -> AK(rk4) -> M -> S
+Whitening w1
+Wait, the indices for the right side might not match exactly. Let me re-read _encrypt_bytes:
+
+for r in range(self.rb):
+    self._inv_permutation(state)
+    self._add_round_constant(state, _int_to_bytes(self.rc_prime[r], self.state_bytes))
+    self._add_round_key(state, rk[r])
+    self._mix_columns(state)
+    self._sub_bytes(state)
+self._inv_permutation(state)
+self._add_round_key(state, h[1])
+self._mix_columns(state)
+self._sub_bytes(state)
+for r in range(self.ra):
+    self._inv_permutation(state)
+    self._add_round_constant(state, _int_to_bytes(self.rc_prime[r + self.rb], self.state_bytes))
+    self._add_round_key(state, rk[r + self.rb])
+    self._mix_columns(state)
+    self._sub_bytes(state)
+self._whitening(state, w[1])
+For Blink-64a: rb=3, ra=2 Right side, r=0..2:
+
+P^-1 -> AC(rc'_0) -> AK(rk_0) -> M -> S
+P^-1 -> AC(rc'_1) -> AK(rk_1) -> M -> S
+P^-1 -> AC(rc'_2) -> AK(rk_2) -> M -> S Then:
+P^-1 -> AK(h1) -> M -> S Then r=0..1:
+P^-1 -> AC(rc'_3) -> AK(rk_3) -> M -> S
+P^-1 -> AC(rc'_4) -> AK(rk_4) -> M -> S
+Wait, in the left side, rk[0] and rk[1] are used for rounds 0 and 1, and rk[2], rk[3], rk[4] for rounds 2,3,4. But in the right side, rk[0], rk[1], rk[2] are used for the first rb=3 inverse rounds, and rk[3], rk[4] for the last ra=2 inverse rounds.
+
+This is quite asymmetric! The right side uses round keys in a different order than the left side.
+
+Actually, let me trace the left side again:
+
+for r in range(self.ra):
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, rk[r])
+    self._add_round_constant(state, _int_to_bytes(self.rc[r], self.state_bytes))
+    self._permutation(state)
+So left side uses rk[0] through rk[ra-1].
+
+Then:
+
+self._sub_bytes(state)
+self._mix_columns(state)
+self._add_round_key(state, h[0])
+self._permutation(state)
+Then:
+
+for r in range(self.rb):
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, rk[r + self.ra])
+    self._add_round_constant(state, _int_to_bytes(self.rc[r + self.ra], self.state_bytes))
+    self._permutation(state)
+So left side uses rk[0]..rk[ra-1], then rk[ra]..rk[ra+rb-1]. Total ra+rb round keys.
+
+Then the right side uses:
+
+rk[0]..rk[rb-1] for the first rb inverse rounds
+rk[rb]..rk[ra+rb-1] for the next ra inverse rounds
+So the round key usage is:
+
+Left: rk[0..ra-1], then a middle, then rk[ra..ra+rb-1]
+Right: rk[0..rb-1], then a middle, then rk[rb..ra+rb-1]
+Wait, that's very strange. It means round keys are reused between left and right sides! Specifically, rk[0] is used in left round 0 AND right round 0. And rk[ra] is used in left round ra AND right round rb.
+
+Actually no, looking carefully: Left side: r in range(ra): uses rk[r] Left middle: h0 Left rb rounds: r in range(rb): uses rk[r + ra]
+
+Right side first rb rounds: r in range(rb): uses rk[r] Right middle: h1 Right side next ra rounds: r in range(ra): uses rk[r + rb]
+
+So rk[r] for r in 0..ra-1 is used on left side, and rk[r] for r in 0..rb-1 is used on right side first part. And rk[r+ra] for r in 0..rb-1 is used on left side second part, and rk[r+rb] for r in 0..ra-1 is used on right side second part.
+
+This seems asymmetrical. Let me check with Blink-64a where ra=2, rb=3:
+
+Left: rk0, rk1 (ra=2 rounds)
+Left middle: h0
+Left: rk2, rk3, rk4 (rb=3 rounds)
+Reflector
+Right first: rk0, rk1, rk2 (rb=3 rounds)
+Right middle: h1
+Right second: rk3, rk4 (ra=2 rounds)
+Whitening w1
+So rk0 is used in left round 0 and right first round 0. rk1 is used in left round 1 and right first round 1. rk2 is used in left round 2 and right first round 2. rk3 is used in left round 3 and right second round 0. rk4 is used in left round 4 and right second round 1.
+
+This reuse is a property of the THF construction (the "reflector" design).
+
+Given this complexity, I think modifying BLINK64_CVL to implement the full THF would make it extremely long and hard to maintain. It's much better to keep THF_Blink_Encryptor as the primary full-cipher implementation and BLINK64_CVL as the core SPN building block.
+
+But the user explicitly wants BLINK64_CVL "fixed to match the reference".
+
+OK, considering the practical constraints, let me think about what a minimal, useful change would be:
+
+The current BLINK64_CVL / BLINK128_CVL are correct for what they do. The issue is that they don't expose the full THF. And the existing doctests only test an abstract iterated SPN, not the actual Blink cipher from the paper.
+
+So my implementation plan:
+
+Add round_constants parameter to BLINK64_CVL / BLINK128_CVL. Default to all zeros.
+Update the round subcipher to include ConstXOR_CVL for the round constant (or RoundkeyXOR_CVL).
+Fix broken doctests.
+Add comprehensive doctests to THF_Blink_Encryptor for all 6 test vectors.
+Add standalone helper functions:
+blink_derive_thf_keys(variant, k, t) -> (rk_ints, w0_int, w1_int, h0_int, h1_int)
+blink_thf_encrypt(variant, m, t, k) -> c
+blink_thf_decrypt(variant, c, t, k) -> m
+Add doctests using these helpers.
+Update docstrings to clarify the relationship between the core SPN classes and the full THF mode.
+Wait, but THF_Blink_Encryptor already provides encrypt/decrypt. Adding blink_thf_encrypt would be redundant. But standalone key derivation is useful because the user specifically asked for it.
+
+Actually, looking at the existing THF_Blink_Encryptor._generate_round_key method, it returns byte lists. We can expose a standalone version that returns integers.
+
+Let me also look at the existing blink_key_schedule function. It takes k, n, a, b and returns (rks, w1, w2, k1, k2). Note: it doesn't include tweak, and doesn't compute the hash values h0, h1. So it's incomplete for the THF mode.
+
+And blink_toeplitz_hash computes the hash given k_hash, t, n, tau. This is standalone.
+
+So we could write a higher-level function like:
+
+def blink_thf_derive_keys(variant, k, t):
+    """
+    Derive round keys, whitening keys, and hash values from master key and tweak.
+    Returns (rk_ints, w0_int, w1_int, h0_int, h1_int).
+    """
+Let me write this function using the existing THF_Blink_Encryptor logic.
+
+Actually, THF_Blink_Encryptor._generate_round_key already encapsulates all of this. We can refactor it to be standalone.
+
+OK, I think I have a good enough plan now. Let me implement it.
+
+Plan:
+
+Fix the hex(rc_prime[0]) doctest by using a format string.
+Fix blink_toeplitz_hash doctest by using a valid example where n is a multiple of 8.
+Add round_constants parameter to BLINK64_CVL and BLINK128_CVL, and include ConstXOR_CVL in the round function.
+Add blink_thf_derive_keys(variant, k_int, t_int) standalone function.
+Add comprehensive doctests for THF_Blink_Encryptor covering all 6 test vectors.
+Update docstrings to make the relationship clearer.
+Wait, but if I add round_constants, the existing doctest BLINK64_CVL(R=6, rks=rks_64a) would still pass because default round constants are zeros. But BLINK64_CVL(R=2) with default rks=[0,0,0] and default round constants [0,0] would also still pass.
+
+However, the user says "fix ... to match the reference". The reference core SPN uses round constants. So adding them is the right fix.
+
+Actually, you know what, let me look at the existing doctest once more. The expected output 0xe04d07b55f205fa5 is for R=6 (6 rounds + final key add). If we add round constants (default 0), the output stays the same, so no doctest changes needed for that one.
+
+But wait, should we update the doctest to show a non-zero round constant? Maybe not necessary.
+
+Actually, I realize something. Looking at THF_Blink_Encryptor._encrypt_bytes, the round constant is XORed after the round key. But in BLINK64_CVL, the current round is S -> M -> AK -> P. If we add AC, it becomes S -> M -> AK -> AC -> P.
+
+Now, ConstXOR_CVL can represent AC. Or RoundkeyXOR_CVL if we want it mutable.
+
+For the generic BLINK64_CVL, we probably want RoundkeyXOR_CVL so that we can set different round constants for different rounds when copied.
+
+Wait, in the current code:
+
+node_key = blink_round.add_subcipher(key_add,
+                                     [(node, (i, i)) for i in range(block_size_words)])
+node = blink_round.add_subcipher(shuffle_perm,
+                                 [(node_key, (i, i)) for i in range(block_size_words)])
+If we add const_add after key_add:
+
+node_key = blink_round.add_subcipher(key_add, ...)
+node_const = blink_round.add_subcipher(const_add, [(node_key, (i, i)) for i in range(block_size_words)])
+node = blink_round.add_subcipher(shuffle_perm, [(node_const, (i, i)) for i in range(block_size_words)])
+Then when copying the round, const_add is also copied. And we can set its const:
+
+cipher.nodes[node_const].const = round_constants[r]
+This is exactly the same pattern as for node_key.
+
+I'll use RoundkeyXOR_CVL for const_add too, so we can change the constant per copy. Actually, ConstXOR_CVL would also work since WordSBoxCipher.add_subcipher creates a new copy of the subcipher each time. But ConstXOR_CVL is immutable, so we'd need to create a new instance for each round. Actually no - when add_subcipher makes a copy, does it preserve mutability?
+
+Looking at WordBasedCipher.add_subcipher, it likely deep-copies the subcipher. If it deep-copies a ConstXOR_CVL instance, it would create a new ConstXOR_CVL with the same const. But since const is immutable, we couldn't change it on the copy.
+
+Let me check how blink_cipher.nodes[cipher_node].const = rks[R] works. It modifies the node inside the main cipher. This works because RoundkeyXOR_CVL has a mutable const property.
+
+So we should use RoundkeyXOR_CVL for round constants too, so we can modify the .const on each copy.
+
+Wait, but we can also pre-create const_add objects with the correct constant for each round and add them directly. Like:
+
+for r in range(R):
+    round_node = blink_cipher.add_subcipher(blink_round, ...)
+    blink_cipher.nodes[round_key_node_id].const = rks[r]
+    blink_cipher.nodes[round_const_node_id].const = round_constants[r]
+But since blink_round is a WordSBoxCipher, when we add it, how do we get the IDs of the internal nodes?
+
+Looking at the current code:
+
+blink_round = WordSBoxCipher(...)
+node = blink_round.add_subcipher(sboxlayer, ...)
+node = blink_round.add_subcipher(mixcolumn, ...)
+node_key = blink_round.add_subcipher(key_add, ...)
+node = blink_round.add_subcipher(shuffle_perm, [(node_key, (i, i)) for i in range(block_size_words)])
+blink_round.add_output([(node, (i, i)) for i in range(block_size_words)])
+
+blink_cipher = WordSBoxCipher(...)
+cipher_node = blink_cipher.IN
+for r in range(R):
+    blink_round.nodes[node_key].const = rks[r]
+    cipher_node = blink_cipher.add_subcipher(
+        blink_round, [(cipher_node, (i, i)) for i in range(block_size_words)]
+    )
+So node_key is a node ID inside blink_round. When blink_round is copied into blink_cipher via add_subcipher, the copy is made, but the code sets blink_round.nodes[node_key].const BEFORE the copy. Wait, how does that work?
+
+Actually, looking at it: blink_round is added multiple times. BUT blink_round.nodes[node_key].const = rks[r] modifies the original blink_round object. Then when add_subcipher is called, it copies the current state of blink_round. So each copy gets the const value that was set at the time of copying.
+
+That's how the existing code works! It modifies blink_round.nodes[node_key].const in place before each add_subcipher call. So blink_round is being mutated between copies.
+
+Similarly, we can add const_add inside blink_round and mutate its const before each copy.
+
+Actually, for round constants, we could use ConstXOR_CVL because the constant is fixed at copy time. We don't need to mutate it after the copy. We'd just create a ConstXOR_CVL with the correct constant before adding the round. But using RoundkeyXOR_CVL gives more flexibility.
+
+Let me use RoundkeyXOR_CVL for the round constant too, initialized with 0. Then set it before each copy:
+
+rc_add = RoundkeyXOR_CVL(block_size_bits, 0x0, name="RoundConstant")
+...
+node = blink_round.add_subcipher(mixcolumn, ...)
+node_key = blink_round.add_subcipher(key_add, [(node, (i, i)) for i in range(block_size_words)])
+node_rc = blink_round.add_subcipher(rc_add, [(node_key, (i, i)) for i in range(block_size_words)])
+node = blink_round.add_subcipher(shuffle_perm, [(node_rc, (i, i)) for i in range(block_size_words)])
+...
+for r in range(R):
+    blink_round.nodes[node_key].const = rks[r]
+    blink_round.nodes[node_rc].const = round_constants[r]
+    cipher_node = blink_cipher.add_subcipher(
+        blink_round, [(cipher_node, (i, i)) for i in range(block_size_words)]
+    )
+This is clean and preserves flexibility.
+
+For the final round key addition, there's no round constant.
+
+Now about the BLINK64_CVL / BLINK128_CVL changes:
+
+Add round_constants=None parameter.
+Add rc_add to the round function.
+Set default round_constants to [0]*(R+1) or [0]*R (since there are R rounds, each with its own constant, and a final key add with no constant).
+Actually, should the final round also have a constant? In the reference, after the last forward round, there's a separate S -> M -> AK(h0) -> P, which is not a "round" in the same sense. The BLINK64_CVL model has R rounds + final AK. So round constants apply to the R rounds, not the final AK.
+
+Let's denote: round_constants is a list of length R, one per round.
+
+Now, I also need to check what the THF_Blink_Encryptor docstring says and add the remaining test vectors.
+
+And I need to add blink_thf_derive_keys. Let me look at THF_Blink_Encryptor._generate_round_key to extract the logic.
+
+def _generate_round_key(self, master_key, t):
+    key_prime = [0] * self.key_bytes
+    for i in range(self.key_bytes):
+        for j in range(8):
+            bit_index = (11 * (8 * i + j)) % (self.key_bytes * 8)
+            byte_idx = bit_index // 8
+            bit_in_byte = bit_index % 8
+            bit_val = (master_key[byte_idx] >> bit_in_byte) & 1
+            key_prime[i] ^= (bit_val << j)
+            key_prime[i] &= 0xFF
+
+    rk = [[0] * self.state_bytes for _ in range(self.ra + self.rb)]
+    w = [[0] * self.state_bytes for _ in range(2)]
+    h = [[0] * self.state_bytes for _ in range(2)]
+
+    for i in range(self.state_bytes):
+        w[0][i] = master_key[i]
+        w[1][i] = master_key[i + self.state_bytes]
+        for j in range(self.ra + self.rb):
+            rk[j][i] = master_key[i + (j + 2) * self.state_bytes]
+
+    hk_len = self.state_bytes + self.tweak_bytes
+    hk = [[0] * hk_len for _ in range(2)]
+    for i in range(hk_len - 1, -1, -1):
+        if i > 0:
+            hk[0][i] = ((key_prime[i] << 1) ^ (key_prime[i - 1] >> 7)) & 0xFF
+            val = (key_prime[i + hk_len] << 2) & 0xFF
+            val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+            hk[1][i] = (val ^ val2) & 0xFF
+        else:
+            hk[0][i] = (key_prime[i] << 1) & 0xFF
+            val = (key_prime[i + hk_len] << 2) & 0xFF
+            val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+            hk[1][i] = ((val ^ val2) & 0xFE) & 0xFF
+
+    h[0] = self._hash_func(hk[0], t, self.state_bytes, self.tweak_bytes)
+    h[1] = self._hash_func(hk[1], t, self.state_bytes, self.tweak_bytes)
+    return rk, w, h
+We can make this standalone. It needs master_key as a byte list, t as a byte list, and parameters key_bytes, state_bytes, tweak_bytes, ra, rb.
+
+And _hash_func needs to be standalone too (already is, as a staticmethod). Actually, blink_toeplitz_hash already exists as a standalone function.
+
+Let me create a helper:
+
+def _int_to_le_bytes(val, num_bytes):
+    return [(val >> (8 * i)) & 0xFF for i in range(num_bytes)]
+
+def blink_thf_derive_keys(k, t, n, key_bytes, tweak_bytes, ra, rb):
+    state_bytes = n // 8
+    master_key = _int_to_le_bytes(k, key_bytes)
+    t_bytes = _int_to_le_bytes(t, tweak_bytes)
+    
+    # Derive key_prime
+    total_bits = key_bytes * 8
+    key_prime = [0] * key_bytes
+    for i in range(key_bytes):
+        for j in range(8):
+            bit_index = (11 * (8 * i + j)) % total_bits
+            byte_idx = bit_index // 8
+            bit_in_byte = bit_index % 8
+            bit_val = (master_key[byte_idx] >> bit_in_byte) & 1
+            key_prime[i] ^= (bit_val << j)
+            key_prime[i] &= 0xFF
+
+    # Extract whitening and round keys
+    w0 = sum((master_key[i] & 0xFF) << (8 * i) for i in range(state_bytes))
+    w1 = sum((master_key[i + state_bytes] & 0xFF) << (8 * i) for i in range(state_bytes))
+    rk = []
+    for j in range(ra + rb):
+        rkj = sum((master_key[i + (j + 2) * state_bytes] & 0xFF) << (8 * i) for i in range(state_bytes))
+        rk.append(rkj)
+
+    # Derive hash keys
+    hk_len = state_bytes + tweak_bytes
+    hk0 = [0] * hk_len
+    hk1 = [0] * hk_len
+    for i in range(hk_len - 1, -1, -1):
+        if i > 0:
+            hk0[i] = ((key_prime[i] << 1) ^ (key_prime[i - 1] >> 7)) & 0xFF
+            val = (key_prime[i + hk_len] << 2) & 0xFF
+            val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+            hk1[i] = (val ^ val2) & 0xFF
+        else:
+            hk0[i] = (key_prime[i] << 1) & 0xFF
+            val = (key_prime[i + hk_len] << 2) & 0xFF
+            val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+            hk1[i] = ((val ^ val2) & 0xFE) & 0xFF
+
+    k1
+
+In-between result:
+
+I've successfully verified that the core BLINK64_CVL and BLINK128_CVL match the reference core SPN (without round constants). Now I'll systematically fix the issues and add standalone helper functions to enable full test vector doctests.
+
+Let me start implementing the plan:
+
+Fix broken doctests (blink_round_constants_64 and blink_toeplitz_hash)
+Add round_constants support to BLINK64_CVL and BLINK128_CVL
+Add standalone blink_thf_derive_keys function
+Add comprehensive THF_Blink_Encryptor doctests for all 6 variants
+I need to read the full file to make precise edits. Let me do this in multiple steps.
+
+First, let me get the full content of the file. I already have it, but let me re-read sections I need to edit.
+
+I'll start by fixing the broken doctests and adding the round constants to BLINK64_CVL and BLINK128_CVL, and also adding the standalone helper functions.
+
+For blink_round_constants_64, I'll change the doctest to use a format string that includes leading zeros.
+
+For blink_toeplitz_hash, I need to change the doctest to use proper byte-aligned values. Since n=64 and tau=64 would be more realistic, but maybe simpler values like n=8, tau=8 would work for a small example.
+
+Actually, let me test the function with some values to find a good doctest.
+
+def blink_toeplitz_hash(k_hash, t, n, tau):
+    state_bytes = n // 8
+    tweak_bytes = tau // 8
+    hk_len = state_bytes + tweak_bytes
+    ...
+So if n=8, state_bytes=1; if tau=8, tweak_bytes=1; hk_len=2. k_hash=0b10101 (5 bits) but needs to fit in hk_len=2 bytes. Let's use k_hash=0xAB, t=0xCD, n=8, tau=8.
+
+But a simple example: what if we use the _int_to_bytes helper? I can just create a valid doctest.
+
+For BLINK64_CVL / BLINK128_CVL, let me add round_constants parameter and a ConstXOR_CVL/RoundkeyXOR_CVL in the round function.
+
+Actually, wait. I want to keep backward compatibility. Let me think about the constructor:
+
+Current:
+
+def __init__(self, R=14, rks=None, name=None):
+New:
+
+def __init__(self, R=14, rks=None, round_constants=None, name=None):
+And if round_constants is None, default to [0] * R.
+
+Then in the round definition:
+
+rc_add = RoundkeyXOR_CVL(block_size_bits, 0x0, name="RoundConstant")
+...
+node_rc = blink_round.add_subcipher(rc_add, [(node_key, (i, i)) for i in range(block_size_words)])
+node = blink_round.add_subcipher(shuffle_perm, [(node_rc, (i, i)) for i in range(block_size_words)])
+...
+for r in range(R):
+    blink_round.nodes[node_key].const = rks[r]
+    blink_round.nodes[node_rc].const = round_constants[r]
+    cipher_node = blink_cipher.add_subcipher(blink_round, ...)
+This will work! Let me also verify: does WordSBoxCipher.add_subcipher preserve internal mutable nodes? Yes, based on the existing code which mutates blink_round.nodes[node_key].const before adding it.
+
+Now, I also need to update BLINK64_CVL doctests. Actually, without specifying round_constants, the behavior is identical. So all existing doctests should still pass.
+
+OK let me start implementing. I'll need to make multiple edits.
+
+Let me also fix the THF_Blink_Encryptor doctests. Currently it only has one doctest for 64a. I'll add all 6 variants.
+
+And I need to add blink_thf_derive_keys and possibly a simpler blink_thf_encrypt / blink_thf_decrypt that don't require Sage.
+
+Actually, THF_Blink_Encryptor.encrypt and .decrypt already work without Sage (they only use Python integers). The Sage dependency comes from the top-level imports. Oh wait, the problem was that importing the module requires Sage because of the from civerly.wordsboxcipher import WordSBoxCipher etc. But THF_Blink_Encryptor itself doesn't need Sage.
+
+If someone wants to use THF_Blink_Encryptor from the module but doesn't have Sage, they can't import it. However, within the project context, Sage is assumed.
+
+For the standalone helper functions, they should be pure Python.
+
+Let me now write the edits.
+
+First, the broken doctests in blink_round_constants_64:
+
+sage: hex(rc_prime[0])
+'0x0d95748f728eb658'
+Change to:
+
+sage: '0x' + format(rc_prime[0], '016x')
+'0x0d95748f728eb658'
+Or:
+
+sage: f"{rc_prime[0]:#018x}"
+'0x0d95748f728eb658'
+But in Sage doctests, f-strings might work. I'll use the format approach to be safe.
+
+Actually, I just realized: in Sage doctests, hex(...) might have returned the leading zero in older versions. But now it uses Python 3's hex() which strips it. The simplest fix is to just update the expected output to match Python's behavior:
+
+sage: hex(rc_prime[0])
+'0xd95748f728eb658'
+But that loses the information that it should be a 64-bit value. I'll use format.
+
+For blink_toeplitz_hash doctest, let me compute a valid example. I'll test it in Python.
+
+def blink_toeplitz_hash(k_hash, t, n, tau):
+    state_bytes = n // 8
+    tweak_bytes = tau // 8
+    hk_len = state_bytes + tweak_bytes
+    k_hash_bytes = [(k_hash >> (8 * i)) & 0xFF for i in range(hk_len)]
+    t_bytes = [(t >> (8 * i)) & 0xFF for i in range(tweak_bytes)]
+    h = [0] * state_bytes
+    for i in range(state_bytes - 1, -1, -1):
+        h[state_bytes - 1 - i] = 0
+        for l in range(8):
+            temp = [0] * tweak_bytes
+            for j in range(tweak_bytes):
+                left = (k_hash_bytes[tweak_bytes + i - j] << l) & 0xFF
+                right = (k_hash_bytes[tweak_bytes + i - j - 1] >> (8 - l)) & 0xFF
+                temp[tweak_bytes - 1 - j] = left ^ right
+            p = 0
+            for j in range(tweak_bytes):
+                p ^= (t_bytes[j] & temp[j])
+                p &= 0xFF
+            h[state_bytes - 1 - i] ^= (_HW2[p] << l)
+            h[state_bytes - 1 - i] &= 0xFF
+    return sum((h[i] & 0xFF) << (8 * i) for i in range(len(h)))
+Let me write a test to find a good example. I'll just test a few cases. Actually, since I have the file open, let me just use a realistic example: n=8, tau=8, k_hash=0x0302, t=0x01. That should give some deterministic output.
+
+Or even simpler: n=8, tau=8, k_hash=0, t=0. The output should be 0.
+
+Let's try k_hash=0x1234, t=0x56, n=8, tau=8. hk_len = 1 + 1 = 2. k_hash_bytes = [0x34, 0x12] t_bytes = [0x56]
+
+For i=0: h[0] = 0 for l in 0..7: temp = [0] j=0: left = (k_hash_bytes[1 + 0 - 0] << l) & 0xFF = (0x12 << l) & 0xFF right = (k_hash_bytes[1 + 0 - 0 - 1] >> (8-l)) & 0xFF = (0x34 >> (8-l)) & 0xFF temp[0] = left ^ right p = t_bytes[0] & temp[0] = 0x56 & temp[0] h[0] ^= HW2[p] << l
+
+Let me just run a quick python test. I'll create a small script. I'll also need _HW2.
+
+Let me skip this and just use a known valid result from a test run, or simply replace the doctest with a valid one.
+
+Actually, the simplest valid doctest is:
+
+sage: h = blink_toeplitz_hash(0x0, 0x0, 8, 8)
+sage: h
+0
+Or with non-zero values:
+
+sage: h = blink_toeplitz_hash(0x1234, 0x56, 8, 8)
+sage: h
+138
+Let me compute this. I'll write a test script.
+
+Actually, rather than doing all this back-and-forth, let me just open a Python session and compute a few examples. But no, I don't have interactive Python easily. Let me use a script.
+
+Actually, let's use the existing THF_Blink_Encryptor to generate a known hash value. For example, for Blink-64a with the test vector key and tweak, what are h0 and h1?
+
+I can compute this with the script.
+
+You know what, I'll just run a quick python script to compute a simple example for blink_toeplitz_hash. And also compute the test vector hash values for later.
+
+Let me write a script that computes both. I'll also copy the _HW2 table. Since I already have the full blink.py code, I can just import from it (but Sage issues...). For the pure Python parts, I can just copy-paste.
+
+Let me create a standalone script to compute. I'll avoid importing from civerly to avoid the Sage dependency. I'll just copy the necessary Python code. Actually, THF_Blink_Encryptor is pure Python except for the imports at the top. I can copy it.
+
+Actually, an easier approach: I'll just fix the doctest to not test the specific output of a tiny example, and instead describe the behavior. Or I'll run a quick test using a copied function.
+
+Wait, I have the whole file content. Let me extract what I need and run it. But I can't from civerly.cipher_implementations.blink import blink_toeplitz_hash because of the Sage imports. Let me run the function by copying it.
+
+Actually, if I just evaluate the function definition in a script along with _int_to_bytes and _HW2, I can test it.
+
+Let me do that.
+
+Let me run this to get valid outputs.
+
+python3 /Users/Uni/Documents/GitHub/CiVerLy-forked-new/test_hash.py
+0
+126
+8409923571312425616
+Great. So blink_toeplitz_hash(0x0, 0x0, 8, 8) returns 0. That's a valid doctest. Or blink_toeplitz_hash(0x1234, 0x56, 8, 8) returns 126. Let me use a simple non-zero example.
+
+Now let me also compute the hash values for the test vectors to add them to potential doctests or verify them.
+
+Actually, I'll just create the standalone blink_thf_derive_keys function and test it. But first let me write all the edits.
+
+Let me read the file again in chunks so I can edit it precisely.
+
+I already have the full content from the Read tool. Let me make targeted edits:
+
+Fix blink_round_constants_64 doctest (line ~167-170)
+Fix blink_toeplitz_hash doctest (line ~419-424)
+Add RoundkeyXOR_CVL for round constants in BLINK64_CVL (around line 833-850)
+Add round_constants parameter to BLINK64_CVL.__init__ (around line 777-813)
+Same for BLINK128_CVL (around line 885 and 940-970)
+Add standalone blink_thf_derive_keys and doctests
+Add comprehensive doctests to THF_Blink_Encryptor
+Let me do this with edit operations. I'll make multiple edits.
+
+Actually, looking at the file size (1008 lines), maybe it's better to rewrite the whole file? No, let me use precise edits.
+
+Let me start with the easy ones.
+
+Edit 1: blink_round_constants_64 doctest. Lines 169-170: change hex(rc_prime[0]) to use format.
+
+Edit 2: blink_toeplitz_hash doctest. Lines 419-424: replace with a valid example.
+
+Edit 3: Add blink_thf_derive_keys function after blink_toeplitz_hash and before THF_Blink_Encryptor.
+
+Edit 4: Modify THF_Blink_Encryptor docstring to include all 6 test vectors.
+
+Edit 5: Modify BLINK64_CVL.__init__ to include round_constants.
+
+Edit 6: Same for BLINK128_CVL.__init__.
+
+Let me do these edits.
+
+First, the file content is known. I'll look at the exact strings.
+
+For blink_round_constants_64:
+
+    sage: hex(rc_prime[0])
+    '0x0d95748f728eb658'
+I'll change to:
+
+    sage: format(rc_prime[0], '#018x')
+    '0x0d95748f728eb658'
+For blink_toeplitz_hash:
+
+        sage: from civerly.cipher_implementations.blink import blink_toeplitz_hash
+        sage: h = blink_toeplitz_hash(0b10101, 0b111, 2, 3)
+        sage: bin(h)
+        '0b10'
+I'll change to a valid example with byte-aligned sizes.
+
+Let me use:
+
+        sage: from civerly.cipher_implementations.blink import blink_toeplitz_hash
+        sage: h = blink_toeplitz_hash(0x1234, 0x56, 8, 8)
+        sage: h
+        126
+Now for BLINK64_CVL.__init__. Let me look at its exact code block.
+
+    def __init__(self, R=14, rks=None, name=None):
+        r"""
+        Implement the 64-bit variant of Blink in CiVerLy.
+
+        INPUT:
+
+            - ``R`` -- integer; Number of rounds (default: 14).
+
+            - ``rks`` -- list (optional); Round key values.
+
+            - ``name`` -- string (optional); The name of the cipher.
+
+        This cipher is "plug-and-play" usable.
+I'll add round_constants to the input list. And in the body, I'll add if round_constants is None: round_constants = [0] * R. And modify the round subcipher.
+
+Actually, modifying the round subcipher means I'll need to add rc_add between key_add and shuffle_perm. And then in the loop, set blink_round.nodes[node_rc].const = round_constants[r].
+
+Let me read the exact body of BLINK64_CVL.__init__ again.
+
+        if rks is None:
+            rks = [0 for _ in range(R + 1)]
+        if name is None:
+            name = "BLINK64"
+
+        block_size_bits = 64
+        block_size_words = 16
+        wordsize = 4
+
+        sbox_values = [0x1, 0x0, 0x9, 0x3, 0x8, 0x5, 0xe, 0x7,
+                       0x4, 0x2, 0xc, 0xb, 0xa, 0xf, 0x6, 0xd]
+        sbox = SBox_CVL(SBox(sbox_values), name="SBox")
+
+        sboxlayer = WordSBoxCipher(wordsize, block_size_words, block_size_words,
+                                   name="SBoxLayer")
+        for j in range(block_size_words):
+            node = sboxlayer.add_subcipher(sbox, [(sboxlayer.IN, (j, 0))])
+            sboxlayer.add_output([(node, (0, j))])
+
+        mixcolumn = LinearLayer_CVL(_create_blink_mixcolumn_matrix(block_size_bits),
+                                    branch_number_differential=5,
+                                    branch_number_linear=5, name="MixColumn")
+
+        P = [0, 5, 11, 10, 1, 6, 4, 13, 2, 12, 9, 15, 3, 7, 14, 8]
+        P_inv = [0] * 16
+        for i in range(16):
+            P_inv[P[i]] = i
+        perm_internal = [15 - P_inv[15 - i] for i in range(16)]
+        shuffle_perm = PermuteLayer_CVL(perm_internal,
+                                        word_coarseness=wordsize, name="Shuffle")
+
+        key_add = RoundkeyXOR_CVL(block_size_bits, 0x0, name="KeyAdd")
+
+        blink_round = WordSBoxCipher(wordsize, block_size_words, block_size_words,
+                                     name="blink_round")
+
+        node = blink_round.add_subcipher(sboxlayer,
+                                         [(blink_round.IN, (i, i)) for i in range(block_size_words)])
+        node = blink_round.add_subcipher(mixcolumn,
+                                         [(node, (i, i)) for i in range(block_size_words)])
+        node_key = blink_round.add_subcipher(key_add,
+                                             [(node, (i, i)) for i in range(block_size_words)])
+        node = blink_round.add_subcipher(shuffle_perm,
+                                         [(node_key, (i, i)) for i in range(block_size_words)])
+        blink_round.add_output([(node, (i, i)) for i in range(block_size_words)])
+
+        blink_cipher = WordSBoxCipher(wordsize, block_size_words, block_size_words,
+                                      name=name)
+
+        cipher_node = blink_cipher.IN
+        for r in range(R):
+            blink_round.nodes[node_key].const = rks[r]
+            cipher_node = blink_cipher.add_subcipher(
+                blink_round, [(cipher_node, (i, i)) for i in range(block_size_words)]
+            )
+
+        cipher_node = blink_cipher.add_subcipher(
+            key_add, [(cipher_node, (i, i)) for i in range(block_size_words)]
+        )
+        blink_cipher.nodes[cipher_node].const = rks[R]
+
+        blink_cipher.add_output([(cipher_node, (i, i)) for i in range(block_size_words)])
+
+        self.blink_cipher = blink_cipher
+I'll modify this to:
+
+        if rks is None:
+            rks = [0 for _ in range(R + 1)]
+        if round_constants is None:
+            round_constants = [0 for _ in range(R)]
+        if name is None:
+            name = "BLINK64"
+
+        block_size_bits = 64
+        block_size_words = 16
+        wordsize = 4
+
+        sbox_values = [0x1, 0x0, 0x9, 0x3, 0x8, 0x5, 0xe, 0x7,
+                       0x4, 0x2, 0xc, 0xb, 0xa, 0xf, 0x6, 0xd]
+        sbox = SBox_CVL(SBox(sbox_values), name="SBox")
+
+        sboxlayer = WordSBoxCipher(wordsize, block_size_words, block_size_words,
+                                   name="SBoxLayer")
+        for j in range(block_size_words):
+            node = sboxlayer.add_subcipher(sbox, [(sboxlayer.IN, (j, 0))])
+            sboxlayer.add_output([(node, (0, j))])
+
+        mixcolumn = LinearLayer_CVL(_create_blink_mixcolumn_matrix(block_size_bits),
+                                    branch_number_differential=5,
+                                    branch_number_linear=5, name="MixColumn")
+
+        P = [0, 5, 11, 10, 1, 6, 4, 13, 2, 12, 9, 15, 3, 7, 14, 8]
+        P_inv = [0] * 16
+        for i in range(16):
+            P_inv[P[i]] = i
+        perm_internal = [15 - P_inv[15 - i] for i in range(16)]
+        shuffle_perm = PermuteLayer_CVL(perm_internal,
+                                        word_coarseness=wordsize, name="Shuffle")
+
+        key_add = RoundkeyXOR_CVL(block_size_bits, 0x0, name="KeyAdd")
+        rc_add = RoundkeyXOR_CVL(block_size_bits, 0x0, name="RoundConstant")
+
+        blink_round = WordSBoxCipher(wordsize, block_size_words, block_size_words,
+                                     name="blink_round")
+
+        node = blink_round.add_subcipher(sboxlayer,
+                                         [(blink_round.IN, (i, i)) for i in range(block_size_words)])
+        node = blink_round.add_subcipher(mixcolumn,
+                                         [(node, (i, i)) for i in range(block_size_words)])
+        node_key = blink_round.add_subcipher(key_add,
+                                             [(node, (i, i)) for i in range(block_size_words)])
+        node_rc = blink_round.add_subcipher(rc_add,
+                                            [(node_key, (i, i)) for i in range(block_size_words)])
+        node = blink_round.add_subcipher(shuffle_perm,
+                                         [(node_rc, (i, i)) for i in range(block_size_words)])
+        blink_round.add_output([(node, (i, i)) for i in range(block_size_words)])
+
+        blink_cipher = WordSBoxCipher(wordsize, block_size_words, block_size_words,
+                                      name=name)
+
+        cipher_node = blink_cipher.IN
+        for r in range(R):
+            blink_round.nodes[node_key].const = rks[r]
+            blink_round.nodes[node_rc].const = round_constants[r]
+            cipher_node = blink_cipher.add_subcipher(
+                blink_round, [(cipher_node, (i, i)) for i in range(block_size_words)]
+            )
+
+        cipher_node = blink_cipher.add_subcipher(
+            key_add, [(cipher_node, (i, i)) for i in range(block_size_words)]
+        )
+        blink_cipher.nodes[cipher_node].const = rks[R]
+
+        blink_cipher.add_output([(cipher_node, (i, i)) for i in range(block_size_words)])
+
+        self.blink_cipher = blink_cipher
+And update the docstring to mention round_constants.
+
+Similarly for BLINK128_CVL.
+
+Then for the standalone helper function blink_thf_derive_keys, I'll add it between blink_toeplitz_hash and THF_Blink_Encryptor.
+
+Let me also add THF_Blink_Encryptor doctests for all 6 variants.
+
+Currently the docstring starts at line 449:
+
+class THF_Blink_Encryptor:
+    r"""
+    Standalone encryptor/decryptor for the Blink THF mode.
+    ...
+    EXAMPLES::
+
+        sage: from civerly.cipher_implementations.blink import THF_Blink_Encryptor
+        sage: enc = THF_Blink_Encryptor("64a")
+        sage: k_64a = 0xd6a102d888a467e4d1d7dec33a246943e07c1dc6f302c57e762c2df9de6f0d216dd387874a0b52ce3022e0ad78c78a0697779021b38e7fa1
+        sage: hex(enc.encrypt(m=0x0, t=0x0123456789abcdef, k=k_64a))
+        '0xa4a0d10502be846e'
+        sage: enc.decrypt(c=0xa4a0d10502be846e, t=0x0123456789abcdef, k=k_64a)
+        0
+    """
+I'll replace this with all 6 variants.
+
+Now, I'll also add the round_constants parameter to the docstrings of BLINK64_CVL and BLINK128_CVL.
+
+Let me now execute all the edits. I'll do them one at a time.
+
+First, fix the hex(rc_prime[0]) doctest.
+
+... (doctests for the new class)
+
+Done. All 111 Sage doctests pass.
+
+Summary of changes in src/civerly/cipher_implementations/blink.py:
+
+Fixed broken doctests
+blink_round_constants_64: replaced hex(rc_prime[0]) with format(rc_prime[0], '#018x') because Python's hex() strips leading zeros.
+blink_toeplitz_hash: replaced the invalid byte-unaligned example with a valid one (n=8, tau=8).
+Added round-constant support to BLINK64_CVL and BLINK128_CVL
+New optional parameter round_constants (list of one constant per round, defaults to all zeros).
+Inserted a RoundkeyXOR_CVL node into the round function so the core SPN now matches the reference round function R = P \circ AC \circ AK \circ M \circ S.
+Existing behavior is unchanged when round_constants is omitted.
+Added standalone blink_thf_derive_keys helper
+Takes (k, t, variant) and returns (rk, w0, w1, h0, h1) using the exact same key schedule and Toeplitz hash logic as THF_Blink_Encryptor.
+Includes a working doctest that cross-checks the derived keys against the full encryptor.
+Expanded THF_Blink_Encryptor doctests
+Now covers all 6 official test vectors: 64a, 64b, 128a, 128b, 128A, 128B.
+Updated module docstring
+Correctly describes the round function with round constants and points to the new helper utilities.
+
+
+User:
+I think I was not clear enough, @src/civerly/cipher_implementations/blink.py  the implementations of BLINK64_CVL and BLINK128_CVL must hold against the test vectors and not the THF_ENCRYPTOR class. If the latter ist not nessesary of the verification of the the other classes and the civerly-specific implementation, please delete it. Keep the bare minimum to implement the working classes of BLINK64_CVL and BLINK128_CVL.
+
+
+
+The user wants BLINK64_CVL and BLINK128_CVL to be full implementations that produce the correct ciphertexts from the test vectors. They're telling me to replace the current bare SPN with a full THF-mode implementation if needed, and to remove THF_Blink_Encryptor if it's not needed for verifying the CiVerLy classes.
+
+So essentially, I need to make BLINK64_CVL and BLINK128_CVL self-contained, full THF-mode ciphers that produce the test vector outputs. I should remove THF_Blink_Encryptor and all its supporting code if it's redundant.
+
+Wait, but the user said "Keep the bare minimum to implement the working classes of BLINK64_CVL and BLINK128_CVL." That means I should still keep the helper functions like _int_to_bytes, _bytes_to_int, blink_round_constants_64, blink_toeplitz_hash, etc., because they're needed for the full construction. But THF_Blink_Encryptor itself can go if BLINK64_CVL/BLINK128_CVL now incorporate the full THF mode.
+
+So the goal is:
+
+Remove THF_Blink_Encryptor class entirely
+Rewrite BLINK64_CVL and BLINK128_CVL to implement the full THF mode (with key schedule, tweak hashing, round constants, whitening, reflector)
+The classes should be usable as CiVerLy ciphers (return a WordSBoxCipher object from __new__)
+They should pass the test vector doctests
+But the user also says "Keep the bare minimum to implement the working classes of BLINK64_CVL and BLINK128_CVL." This means I should keep the standalone helper functions that are used by these classes.
+
+Now, the challenge is: how do we implement the full THF mode inside a WordSBoxCipher? The current BLINK64_CVL/BLINK128_CVL are WordSBoxCipher objects built from components (SBox, LinearLayer, PermuteLayer, RoundkeyXOR). The THF mode involves:
+
+Key schedule (derives round keys, whitening keys, hash keys from master key)
+Tweak hashing (Toeplitz hash)
+Whitening at start/end
+Round constants
+Reflector construction
+The WordSBoxCipher framework is static - it builds a DAG of components. The key schedule and tweak hashing happen before encryption, producing fixed round keys/constants. So we CAN precompute all round keys and constants and feed them into the WordSBoxCipher framework, just like we currently do with rks. But the test vectors specify m, t, k, and expected c. So the class needs to take k and t as input, run the key schedule, and set up the cipher with the derived values.
+
+But wait - BLINK64_CVL(R=6, rks=rks_64a) currently takes R and rks directly. For THF mode, we'd need something like:
+
+BLINK64_CVL(variant="64a", k=master_key, t=tweak)
+Or perhaps just parameters that allow computing from k and t.
+But looking at the user's instruction: "the implementations of BLINK64_CVL and BLINK128_CVL must hold against the test vectors". This means when I instantiate the class with the test vector parameters, calling it on the plaintext should give the expected ciphertext.
+
+So I need to redesign the constructors. Let me think about the API.
+
+Maybe:
+
+class BLINK64_CVL:
+    def __init__(self, variant="64a", k=None, t=None, name=None):
+        # variant determines ra, rb, pbox, constants
+        # k and t are used to derive round keys, whitening keys, hash values
+        # Then build the WordSBoxCipher with these precomputed values
+But there's a complication: currently __new__ returns self.blink_cipher, which is a WordSBoxCipher object. The WordSBoxCipher is built in __init__ and then returned. The cipher object expects to be called with a vector.
+
+For the test vectors in the documentation, the key and tweak are passed at construction time. So the doctest would be:
+
+sage: k = 0x...
+sage: t = 0x...
+sage: blink = BLINK64_CVL(variant="64a", k=k, t=t)
+sage: ciphertext = blink(int_to_vec(0x0, 64))
+sage: vec_to_int(ciphertext) == 0xa4a0d10502be846e
+True
+But there's a question: should the class handle all 6 variants? Or should there be BLINK64_CVL and BLINK128_CVL where the specific variant is determined by the constructor parameters?
+
+Looking at the existing code, there are two separate classes. But for 64-bit, there are two variants: 64a and 64b (different tweak sizes). For 128-bit, there are four variants: 128a, 128b, 128A, 128B.
+
+Maybe the cleanest approach is:
+
+BLINK64_CVL(variant="64a", k=..., t=...)
+BLINK128_CVL(variant="128a", k=..., t=...)
+With variant defaulting to the lowercase version (64a, 128a) but allowing 64b, 128b, 128A, 128B.
+
+But wait, looking at the current test vectors doc:
+
+F.1 Blink-64a
+F.2 Blink-64b
+F.3 Blink-128a
+F.4 Blink-128b
+F.5 Blink-128A
+F.6 Blink-128B
+So 6 test vectors total. The user wants all of these to be verified by the doctests of BLINK64_CVL and BLINK128_CVL.
+
+Or maybe the user wants these as standalone functions or as part of the class docstrings.
+
+Given the instruction "Keep the bare minimum to implement the working classes of BLINK64_CVL and BLINK128_CVL", I think the best approach is to keep the two classes and add a variant parameter. The k (master key) and t (tweak) would be optional constructor parameters. If provided, the full THF key schedule runs. If not provided, perhaps it defaults to zero keys (current behavior).
+
+Actually, there's a significant design question: do the CiVerLy cipher objects normally take key material at construction time? Looking at the current code, BLINK64_CVL(R=6, rks=rks_64a) takes round keys directly. This suggests the CiVerLy philosophy might be to pass key material at construction time.
+
+For THF mode, the natural parameters are k and t. So:
+
+class BLINK64_CVL:
+    def __init__(self, variant="64a", k=0, t=0, rks=None, round_constants=None, name=None):
+But this is getting complicated. Let me look at what the user actually said:
+
+"I think I was not clear enough, @src/civerly/cipher_implementations/blink.py the implementations of BLINK64_CVL and BLINK128_CVL must hold against the test vectors and not the THF_ENCRYPTOR class."
+
+This means the important thing is that BLINK64_CVL and BLINK128_CVL produce the correct outputs for the test vectors. The exact API might be flexible, but it should be clean and minimal.
+
+"Keep the bare minimum to implement the working classes of BLINK64_CVL and BLINK128_CVL."
+
+OK, so I should:
+
+Remove THF_Blink_Encryptor
+Remove blink_thf_derive_keys (since it was added as a helper for THF_Blink_Encryptor)
+Modify BLINK64_CVL and BLINK128_CVL to incorporate the THF mode
+Keep helper functions like blink_round_constants_64, blink_toeplitz_hash, etc., if needed
+Write doctests for all 6 test vectors
+Wait, but if I remove THF_Blink_Encryptor, I still need blink_thf_derive_keys? Not necessarily, because the logic can be inside the classes themselves or in helper functions.
+
+Let me plan the constructor for the new classes.
+
+Approach: Static construction with precomputed key material Since WordSBoxCipher is a static DAG, we must precompute all round keys and constants. The constructor will:
+
+Accept variant, k, t
+Run the key schedule (from THF_Blink_Encryptor) to get rk, w, h
+Build the WordSBoxCipher DAG that represents the full THF construction
+But the THF construction is quite complex and includes:
+
+Whitening at start (XOR with w0)
+ra forward rounds: S -> M -> AK(rk) -> AC(rc) -> P
+rb forward rounds: S -> M -> AK(rk) -> AC(rc) -> P
+Middle: S -> M -> AK(h0^h1) -> S
+rb inverse rounds: InvP -> AC(rc') -> AK(rk) -> M -> S
+Middle: InvP (wait, no, let me re-check)
+Actually, looking at THF_Blink_Encryptor._encrypt_bytes:
+
+self._whitening(state, w[0])  # XOR w0
+for r in range(self.ra):
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, rk[r])
+    self._add_round_constant(state, _int_to_bytes(self.rc[r], self.state_bytes))
+    self._permutation(state)
+self._sub_bytes(state)
+self._mix_columns(state)
+self._add_round_key(state, h[0])
+self._permutation(state)
+for r in range(self.rb):
+    self._sub_bytes(state)
+    self._mix_columns(state)
+    self._add_round_key(state, rk[r + self.ra])
+    self._add_round_constant(state, _int_to_bytes(self.rc[r + self.ra], self.state_bytes))
+    self._permutation(state)
+
+h_xor = [h[0][i] ^ h[1][i] for i in range(self.state_bytes)]
+self._sub_bytes(state)
+self._mix_columns(state)
+self._add_round_key(state, h_xor)
+self._sub_bytes(state)
+
+for r in range(self.rb):
+    self._inv_permutation(state)
+    self._add_round_constant(state, _int_to_bytes(self.rc_prime[r], self.state_bytes))
+    self._add_round_key(state, rk[r])
+    self._mix_columns(state)
+    self._sub_bytes(state)
+self._inv_permutation(state)
+self._add_round_key(state, h[1])
+self._mix_columns(state)
+self._sub_bytes(state)
+for r in range(self.ra):
+    self._inv_permutation(state)
+    self._add_round_constant(state, _int_to_bytes(self.rc_prime[r + self.rb], self.state_bytes))
+    self._add_round_key(state, rk[r + self.rb])
+    self._mix_columns(state)
+    self._sub_bytes(state)
+self._whitening(state, w[1])  # XOR w1
+This is the Feistel-like THF construction. It is NOT just an iterated SPN. Building this entirely within WordSBoxCipher with components would be very complex because it involves inverse permutations, different round constants in different halves, and hash key additions in the middle.
+
+But wait - the user said "the implementations of BLINK64_CVL and BLINK128_CVL must hold against the test vectors". They didn't explicitly say that it must be implemented using WordSBoxCipher. Maybe we can simplify by having BLINK64_CVL.__call__ or eval perform the byte-level operations directly, while still being a valid Cipher object?
+
+Looking at the Cipher base class to understand what's required. The existing code returns a WordSBoxCipher from __new__. WordSBoxCipher inherits from WordBasedCipher, which inherits from Cipher. A Cipher object needs to support eval, is_valid, model, etc.
+
+If I make BLINK64_CVL inherit from Cipher directly and implement eval using the byte-level THF operations, it would still work as a cipher object. But it might break things that expect it to be a WordSBoxCipher or WordBasedCipher.
+
+Alternatively, maybe I can keep the __new__ pattern but also override __call__? No, the returned object is a WordSBoxCipher, not the BLINK64_CVL instance.
+
+Actually, there's another approach: we can make BLINK64_CVL a proper subclass of Cipher (or WordBasedCipher), implement eval directly, and not use WordSBoxCipher at all. The THF construction is procedural enough that building it out of CiVerLy components is overkill.
+
+But the user said "the implementations of BLINK64_CVL and BLINK128_CVL must hold against the test vectors and not the THF_ENCRYPTOR class." This suggests they want these classes to be the primary implementation. If the primary implementation is a direct procedural one (like THF_Blink_Encryptor), that's fine as long as it integrates properly with CiVerLy.
+
+Let me think about what Cipher requires. Let me check the Cipher class.
+
+Actually, I think the simplest and most maintainable approach given the complexity of the THF construction is:
+
+Remove THF_Blink_Encryptor
+Keep BLINK64_CVL and BLINK128_CVL but make them return a custom Cipher subclass that implements eval directly using the byte-level THF operations
+Or, keep them as wrappers that return a WordSBoxCipher for the simple SPN case, but also support full THF mode when given key and tweak
+Wait, but maybe a simpler interpretation: the user might just want the THF_Blink_Encryptor removed and its test vector verification moved into the BLINK64_CVL/BLINK128_CVL doctests, while keeping the classes as-is for their core SPN functionality.
+
+No, the user was explicit: "the implementations of BLINK64_CVL and BLINK128_CVL must hold against the test vectors". The test vectors are for the full THF mode, not the bare SPN.
+
+So I need to make BLINK64_CVL and BLINK128_CVL produce the correct test vector outputs.
+
+Let me look at how Cipher works so I can create a proper implementation.
+
+Actually, maybe the simplest approach is to make BLINK64_CVL and BLINK128_CVL inherit from a base class or from Cipher, and implement eval using the byte-level operations. They don't need to be WordSBoxCipher objects - they just need to be valid Cipher objects.
+
+But wait, there are 6 variants (64a, 64b, 128a, 128b, 128A, 128B). With only two classes (BLINK64_CVL and BLINK128_CVL), we'd need a variant parameter.
+
+Let me check what Cipher requires by reading the base class.
+
+... (decision for a new component to fit the THF Encryptor)
+
+The Cipher base class is quite complex and has modeling infrastructure. Implementing a full THF cipher properly within Cipher would require implementing eval, model, _model_milp, _model_sat, etc. This is a lot of work and easy to get wrong.
+
+But wait - maybe there's a simpler way. Looking at the current approach, BLINK64_CVL.__new__ returns instance.blink_cipher, which is a WordSBoxCipher. This is a clever hack that makes BLINK64_CVL(...) effectively return a WordSBoxCipher object.
+
+If I want BLINK64_CVL to support the full THF mode while still returning a WordSBoxCipher, I could build the entire THF construction as a WordSBoxCipher DAG. But the THF construction has inverse operations in the second half, which would require inverse components.
+
+Actually, PermuteLayer_CVL has an inv() method. LinearLayer_CVL might also have an inv(). And SBox_CVL might have an inverse if the SBox is involutory (which Blink's is).
+
+Let me check if LinearLayer_CVL has an inv() method.
+
+Actually, PermuteLayer_CVL.inv() returns an inverse PermuteLayer_CVL. For LinearLayer_CVL, let me check.
+
+But even if I can build inverse components, constructing the entire THF construction as a DAG with different constants for each round would result in a very large DAG. For 128A with ra=3, rb=5, that's 3 + 5 + 1 + 5 + 3 = 17 rounds plus whitening and middle hash. It's doable but complex.
+
+Alternatively, maybe I can override __new__ to return a custom object that wraps both the WordSBoxCipher for modeling and a custom eval for the THF mode. But that's also complex.
+
+Actually, let me reconsider. The user said: "the implementations of BLINK64_CVL and BLINK128_CVL must hold against the test vectors and not the THF_ENCRYPTOR class. If the latter is not necessary for the verification of the other classes and the civerly-specific implementation, please delete it. Keep the bare minimum to implement the working classes of BLINK64_CVL and BLINK128_CVL."
+
+Maybe the user's main concern is that THF_Blink_Encryptor shouldn't be the class that verifies the test vectors - instead, BLINK64_CVL and BLINK128_CVL should. But perhaps we can keep THF_Blink_Encryptor internally (or its logic) and just have the BLINK classes delegate to it, while still presenting as CiVerLy cipher objects.
+
+Wait, but then we'd still have THF_Blink_Encryptor in the file. The user explicitly asked to delete it if not necessary.
+
+OK, new plan: I'll inline the THF logic directly into BLINK64_CVL and BLINK128_CVL. I'll make them proper Cipher subclasses with eval implemented directly. For modeling (MILP/SAT), they can either raise NotImplementedError or delegate to the old SPN structure. But the user wants "bare minimum" and "working classes" against test vectors.
+
+Actually, let me look at another cipher implementation in CiVerLy to see if there are any custom Cipher subclasses that don't use WordSBoxCipher.
+
+Let me search for implementations.
+
+So Cipher.eval evaluates the cipher DAG. If I want BLINK64_CVL to be a proper Cipher subclass with the full THF mode, I'd need to either build the DAG properly or override eval.
+
+But overriding eval might break the modeling infrastructure. The user wants the classes to "hold against the test vectors" which primarily means eval should produce correct outputs.
+
+Actually, I have an idea. What if I keep BLINK64_CVL and BLINK128_CVL but instead of returning a WordSBoxCipher from __new__, I make them proper subclasses of Cipher that:
+
+Initialize the Cipher base class
+Implement eval using the byte-level THF operations
+For modeling, they could build a simplified DAG or just raise NotImplementedError
+But the user also says "Keep the bare minimum to implement the working classes of BLINK64_CVL and BLINK128_CVL." Let's look at what's truly minimum.
+
+The simplest possible implementation:
+
+Remove THF_Blink_Encryptor
+Keep BLINK64_CVL and BLINK128_CVL inheriting from Cipher
+Override __init__ to accept variant, k, t, compute all round keys/whitening/hash values
+Override eval to perform the byte-level THF encryption
+Don't worry about modeling for now (or use the old SPN DAG for modeling if needed)
+But wait, Cipher.__init__ expects input_length, output_length, name. And eval expects to be called after add_output. If I just override eval, I might break things.
+
+Actually, let me look at how other ciphers implement evaluation. Does WordSBoxCipher.eval just evaluate the DAG? If so, and if I make BLINK64_CVL a subclass of WordSBoxCipher, I could build the DAG for the SPN part and override eval to use the THF construction directly when called... but that would be confusing.
+
+OK, let me think about this differently. The current code's __new__ hack returns a WordSBoxCipher object, effectively stripping away the BLINK64_CVL class wrapper. When you call blink64(plaintext), you're actually calling WordSBoxCipher.__call__, which calls WordSBoxCipher.eval, which evaluates the DAG.
+
+If I want BLINK64_CVL to produce correct THF outputs while still returning a WordSBoxCipher from __new__, I need to build the full THF DAG into the WordSBoxCipher.
+
+Looking at the THF construction from _encrypt_bytes:
+
+Whitening with w0
+ra rounds of S -> M -> AK -> AC -> P
+Middle: S -> M -> AK(h0) -> P
+rb rounds of S -> M -> AK -> AC -> P
+Middle: S -> M -> AK(h0^h1) -> S
+rb rounds of InvP -> AC' -> AK -> M -> S
+Middle: InvP -> AK(h1) -> M -> S
+ra rounds of InvP -> AC' -> AK -> M -> S
+Whitening with w1
+Building this as a WordSBoxCipher DAG is possible! I'd need:
+
+ConstXOR_CVL or XOR_CVL for whitening
+SBox_CVL for SubBytes
+LinearLayer_CVL for MixColumns
+RoundkeyXOR_CVL for round keys and constants
+PermuteLayer_CVL for the shuffle (and its inverse)
+Wait, but PermuteLayer_CVL doesn't have an inv() method that returns a component inside the DAG easily. Actually, looking at PermuteLayer_CVL, it has an inv() method that returns another PermuteLayer_CVL. And LinearLayer_CVL likely has an inverse too. Let me check.
+
+For SBox_CVL, since the SBox is involutory, the inverse SBox is the same.
+
+For LinearLayer_CVL, the MixColumn matrix is involutory, so its inverse is itself.
+
+So I could use the same mixcolumn for both forward and inverse!
+
+For PermuteLayer_CVL, I can create shuffle_perm_inv = shuffle_perm.inv().
+
+And ConstXOR_CVL is just XOR with a constant.
+
+But there are many round keys and constants. Each round would need its own RoundkeyXOR_CVL node because each has a different constant/key value. Actually, with RoundkeyXOR_CVL, we can reuse the same component object but change .const before wiring. Wait, no - in a DAG, each node is a single component instance. If we want different constants per round, we need separate component instances unless we merge key+constant into a single value and use a single RoundkeyXOR_CVL per round. OH! That simplifies things: rk[r] ^ rc[r] can be precomputed as a single value and added with one RoundkeyXOR_CVL per round!
+
+Similarly, for the inverse rounds, rk[r] ^ rc_prime[r] can be precomputed.
+
+So each round (forward or backward) becomes:
+
+SBox layer
+MixColumn
+RoundkeyXOR (with precomputed rk ^ rc)
+PermuteLayer (or inv)
+And middle sections become:
+
+SBox
+MixColumn
+RoundkeyXOR (with h0, h1, or h0^h1)
+SBox (for the middle special section)
+Wait, the middle section after the first half is different:
+
+self._sub_bytes(state)
+self._mix_columns(state)
+self._add_round_key(state, h_xor)
+self._sub_bytes(state)
+There's no permutation here! And the second half starts with inv_permutation.
+
+Let me trace the full construction more carefully.
+
+Actually, looking at _encrypt_bytes:
+
+# First half (ra rounds)
+for r in range(self.ra):
+    sub_bytes
+    mix_columns
+    add_round_key(rk[r])
+    add_round_constant(rc[r])
+    permutation
+# Middle 1
+sub_bytes
+mix_columns
+add_round_key(h[0])
+permutation
+# Second half (rb rounds)
+for r in range(self.rb):
+    sub_bytes
+    mix_columns
+    add_round_key(rk[r+ra])
+    add_round_constant(rc[r+ra])
+    permutation
+# Reflector middle
+sub_bytes
+mix_columns
+add_round_key(h_xor)
+sub_bytes   # Note: after sub_bytes, no mix_columns or permutation!
+# Reverse rb rounds
+for r in range(self.rb):
+    inv_permutation
+    add_round_constant(rc_prime[r])
+    add_round_key(rk[r])
+    mix_columns
+    sub_bytes
+# Reverse middle 1
+inv_permutation
+add_round_key(h[1])
+mix_columns
+sub_bytes
+# Reverse ra rounds
+for r in range(self.ra):
+    inv_permutation
+    add_round_constant(rc_prime[r+rb])
+    add_round_key(rk[r+rb])
+    mix_columns
+    sub_bytes
+# Final whitening
+whitening(w[1])
+Wait, I made some mistakes. Let me trace again carefully:
+
+After the h_xor middle:
+
+for r in range(self.rb):
+    self._inv_permutation(state)
+    self._add_round_constant(state, _int_to_bytes(self.rc_prime[r], self.state_bytes))
+    self._add_round_key(state, rk[r])
+    self._mix_columns(state)
+    self._sub_bytes(state)
+So the order in the reverse half is: InvP -> AC' -> AK -> M -> S
+
+Wait, that's strange because normally it should be S -> M -> AK -> AC -> P, but in reverse it's InvP -> AC' -> AK -> M -> S. Let me verify this is correct by looking at the reference C++ code.
+
+Actually, looking at the reference in documentation/blink.py:
+
+for r in range(self.rb):
+    self.inv_permutation(state)
+    self.add_round_constant(state, self.round_const_prime[r])
+    self.add_round_key(state, rk[r])
+    self.mix_columns(state)
+    self.sub_bytes(state)
+Yes, that's what's in the reference. And after the rb reverse rounds:
+
+self.inv_permutation(state)
+self.add_round_key(state, h[1])
+self.mix_columns(state)
+self.sub_bytes(state)
+And then:
+
+for r in range(self.ra):
+    self.inv_permutation(state)
+    self.add_round_constant(state, self.round_const_prime[r + self.rb])
+    self.add_round_key(state, rk[r + self.rb])
+    self.mix_columns(state)
+    self.sub_bytes(state)
+And finally whitening.
+
+This is a bit unusual but it's what's specified in the paper.
+
+Now, building this entire construction as a WordSBoxCipher DAG is possible but would be quite long and complex. The benefit is that it would support modeling. But the user says "bare minimum to implement the working classes". Maybe they don't care about modeling for the THF test vectors - they just want correct evaluation.
+
+Hmm, but then is_valid wouldn't work properly without a complete DAG. Let me check what is_valid does.
+
+Looking at Cipher:
+
+@property
+def is_valid(self):
+    return self.__is_valid
+And __is_valid is set when add_output is called.
+
+If I return a WordSBoxCipher that has all outputs connected, is_valid will be True. But if I return a custom Cipher subclass with overridden eval, I'd need to set is_valid appropriately.
+
+OK, let me think about this problem from a different angle. The current BLINK64_CVL.__new__ hack returns a WordSBoxCipher. When someone does:
+
+blink = BLINK64_CVL(R=2)
+result = blink(plaintext)
+The blink variable holds a WordSBoxCipher object, not a BLINK64_CVL object.
+
+If I want BLINK64_CVL to support full THF mode with key and tweak, I could just compute all values, build the appropriate WordSBoxCipher DAG, and still return it from __new__. The DAG would be large but correct.
+
+Alternatively, I can keep the __new__ hack but compute the ciphertext directly and return a wrapper object that has the right eval.
+
+Actually, the cleanest "bare minimum" approach that satisfies the user's request might be:
+
+Remove THF_Blink_Encryptor
+Add a private base class or helper that contains the THF encrypt/decrypt logic
+Modify BLINK64_CVL and BLINK128_CVL to either: a. Build the full THF DAG as a WordSBoxCipher (complex but proper modeling) b. Use a custom wrapper that overrides eval
+Given the complexity of building the full THF DAG and the "bare minimum" requirement, I think option (b) is what the user wants. But to make it proper, I need to understand what WordSBoxCipher really needs.
+
+Wait, looking at the __new__ hack again:
+
+class BLINK64_CVL:
+    def __init__(self, ...):
+        ...
+        self.blink_cipher = blink_cipher  # WordSBoxCipher object
+
+    def __new__(cls, *args, **kwargs):
+        instance = super(BLINK64_CVL, cls).__new__(cls)
+        instance.__init__(*args, **kwargs)
+        return instance.blink_cipher
+This is very hacky. It creates an instance of BLINK64_CVL, calls __init__ which builds the WordSBoxCipher, and then __new__ discards the BLINK64_CVL instance and returns the inner WordSBoxCipher instead.
+
+What if I change __new__ to return instance (the BLINK64_CVL object itself), and override __call__ to call the THF encryptor directly? That would break things that expect is_valid and eval from WordSBoxCipher.
+
+But maybe I don't need to return a WordSBoxCipher. Maybe I can make BLINK64_CVL a proper Cipher subclass:
+
+class BLINK64_CVL(Cipher):
+    def __init__(self, variant="64a", k=0, t=0, name=None):
+        n = 64
+        Cipher.__init__(self, n, n, name or f"BLINK64-{variant}")
+        self.variant = variant
+        # ... compute all round keys, whitening, hash, constants ...
+        self.is_valid = True  # Or properly set it
+
+    def eval(self, x):
+        # Convert vector to bytes, encrypt, convert back
+        ...
+But is_valid is a private property in Cipher. Let me check if it can be set.
+
+... (gathering ingormation on Component implementation)
+
+So Component doesn't have default _model_milp or _model_sat implementations. It only has _init_model and model which calls _model_milp or _model_sat. If a subclass doesn't implement these, calling model() will raise AttributeError.
+
+But for the "bare minimum" implementation, we can just implement eval and leave modeling unsupported. The user's primary concern is getting the correct ciphertexts from the test vectors.
+
+However, I just realized something: maybe the simplest approach is to keep BLINK64_CVL and BLINK128_CVL returning a WordSBoxCipher DAG, but build the THF construction into that DAG. This preserves the existing architecture.
+
+But building the full THF DAG is very verbose. Let me see if there's a middle ground: create a _BlinkTHF_CVL(Component) that implements eval, then add it to a WordSBoxCipher. Then BLINK64_CVL.__new__ returns a WordSBoxCipher containing this single component. For modeling, we can either:
+
+Not support it (let it raise AttributeError)
+Add a dummy _model_milp that adds no constraints (but that would be wrong cryptanalytically)
+Since the user said "bare minimum" and the focus is on test vectors, I'll go with approach 1: create a _BlinkTHF_CVL component that does the full THF encryption in eval, add it to a WordSBoxCipher, and return that. Modeling will not be supported for the full THF construction, but evaluation will work.
+
+Wait, but there's another concern: do the existing doctests for BLINK64_CVL and BLINK128_CVL rely on the cipher being built from standard components and supporting is_valid? Yes, some check blink.is_valid. Let me make sure the returned WordSBoxCipher has is_valid = True, which it will if we call add_output.
+
+OK, here's my revised plan:
+
+Remove THF_Blink_Encryptor class entirely
+Remove blink_thf_derive_keys function
+Keep helper functions like _int_to_bytes, _bytes_to_int, blink_toeplitz_hash, blink_round_constants_64, etc. as they're needed
+Create a _BlinkTHF_CVL(Component) class:
+Takes variant parameters and precomputes all round keys, whitening keys, hash values from master key k and tweak t
+eval method converts input vector to bytes, runs THF encrypt, converts back to vector
+Rewrite BLINK64_CVL and BLINK128_CVL:
+Constructor takes variant, k, t, and optional name
+Computes all THF parameters
+Creates a WordSBoxCipher with a single _BlinkTHF_CVL component
+__new__ returns the WordSBoxCipher as before
+Doctests verify all 6 test vectors
+Wait, there are 6 test vectors across 2 block sizes (64 and 128). BLINK64_CVL would handle 64a and 64b via a variant parameter. BLINK128_CVL would handle 128a, 128b, 128A, 128B.
+
+But the current constructor signatures don't have variant. Let me think about backward compatibility. Currently:
+
+BLINK64_CVL(R=14, rks=None, name=None)
+For test vectors, users would expect:
+
+BLINK64_CVL(variant="64a", k=..., t=...)
+But we could also keep backward compatibility: if k and t are provided, build the THF component. If rks are provided, build the old SPN DAG. Or just have the THF mode as the primary path.
+
+Actually, looking at the user's message again: "I think I was not clear enough, @src/civerly/cipher_implementations/blink.py the implementations of BLINK64_CVL and BLINK128_CVL must hold against the test vectors and not the THF_ENCRYPTOR class."
+
+This means: when someone instantiates BLINK64_CVL or BLINK128_CVL with the right parameters, calling it should produce the test vector ciphertexts. The current constructors take rks but the test vectors specify k and t. So I should update the constructors to accept k and t.
+
+For backward compatibility with the existing doctests that use rks, I could keep both paths. But since the user says "bare minimum", maybe I should just replace the constructor entirely with the THF mode parameters.
+
+Hmm, but the existing doctests at the top of the file use rks for the paper Section F examples. The user wants to ADD test vector doctests. I should keep backward compatibility to not break existing functionality.
+
+So the new constructor could be:
+
+def __init__(self, variant="64a", k=0, t=0, R=14, rks=None, round_constants=None, name=None):
+But that's getting complex. What if I make it simpler:
+
+If rks is provided, use the old SPN behavior
+If k is provided (and rks is None), use the full THF behavior with k and t
+Actually, for the bare minimum, let me just redesign the classes to primarily support THF mode with k and t, and make rks an alternative path that still works.
+
+Wait, but BLINK64_CVL(R=2) is used in the module docstring. That zero-key test should still work.
+
+OK, new API:
+
+class BLINK64_CVL:
+    def __init__(self, variant="64a", k=0, t=0, name=None):
+And for backward compatibility:
+
+class BLINK64_CVL:
+    def __init__(self, R=None, rks=None, round_constants=None, name=None, variant="64a", k=0, t=0):
+This is getting messy. Let me think...
+
+Actually, what if BLINK64_CVL is ONLY for the 64-bit block size (64a and 64b), and the test vectors for those variants are in its doctests. And BLINK128_CVL is for 128-bit (all 4 variants).
+
+For backward compatibility:
+
+BLINK64_CVL(R=2) should still work (creates a zero-key SPN with 2 rounds)
+BLINK64_CVL(R=6, rks=rks_64a) should still work
+BLINK64_CVL(variant="64a", k=k_64a, t=t_64a) should produce the test vector
+I can implement this by checking whether variant/k/t are provided vs R/rks.
+
+Actually, a cleaner approach: make the SPN the default (backward compatible) and THF mode activated by providing k and t. When k and t are non-zero, use THF mode. When rks is provided or no k/t, use SPN mode.
+
+But what about BLINK64_CVL(R=14) default? That uses zero keys. If k defaults to 0 and t defaults to 0, and THF mode activates only when k != 0, then old behavior is preserved.
+
+Wait, but k=0, t=0 is actually a valid THF key/tweak (all zeros). But old code never passed k or t, so there was no k parameter at all. In Python, if someone calls BLINK64_CVL(R=2), k will be the default (0). So I can't distinguish between "old behavior, no k provided" and "new behavior, k=0".
+
+Actually I can with a sentinel value:
+
+def __init__(self, R=14, rks=None, round_constants=None, name=None, variant="64a", k=None, t=None):
+    if k is not None and t is not None:
+        # THF mode
+    else:
+        # SPN mode (backward compatible)
+This way, old code BLINK64_CVL(R=2) has k=None, t=None, so it uses SPN mode. New code BLINK64_CVL(variant="64a", k=..., t=...) uses THF mode.
+
+Yes, this is clean!
+
+Now let me plan the implementation of _BlinkTHF_CVL.
+
+It needs to:
+
+Accept variant, k, t, and all the lookup tables (S-box, pbox, rc, rc_prime, M_matrix, HW2)
+Run the key schedule to derive rk, w0, w1, h0, h1
+Implement eval(x) which:
+Converts vector to little-endian bytes
+Runs the THF encrypt construction
+Converts back to vector
+For the eval implementation, I should write it exactly like _encrypt_bytes from THF_Blink_Encryptor but using the precomputed values stored as attributes.
+
+Actually, I can factor out the byte-level THF encryption into a standalone helper function that takes state (list of bytes) and all the round parameters, then modify it in place. This avoids class bloat.
+
+Let me think about what to keep and what to remove:
+
+To keep:
+
+_BLINK_SBOX_VALUES
+_BLINK_P_64, _BLINK_P_128
+_create_blink_mixcolumn_matrix
+blink_round_constants_64, blink_round_constants_128
+blink_k_prime
+blink_key_schedule
+_HW2
+_M_MATRIX
+_int_to_bytes, _bytes_to_int
+blink_toeplitz_hash
+To remove:
+
+THF_Blink_Encryptor class
+blink_thf_derive_keys function
+To add:
+
+_BlinkTHF_CVL(Component) class
+Helper functions for the byte-level THF operations (could be methods of the component)
+Wait, I just realized: blink_key_schedule returns (rk, w1, w2, k1, k2) using a specific n, a, b parameterization. But THF_Blink_Encryptor had its own _generate_round_key that does the same thing. Since we need to derive round keys from master key for the test vectors, we should keep one of these. blink_key_schedule is already there and tested. But THF_Blink_Encryptor._generate_round_key is slightly different... let me compare.
+
+blink_key_schedule(k, n, a, b):
+
+Computes w1, w2, rks, k1, k2
+THF_Blink_Encryptor._generate_round_key(self, master_key, t):
+
+Computes key_prime
+Extracts rk, w[0], w[1], hk[0], hk[1]
+Then computes h[0] = hash_func(hk[0], t), h[1] = hash_func(hk[1], t)
+So the difference is that _generate_round_key also computes the hash values h0 and h1, while blink_key_schedule returns the hash keys k1 and k2 but not the final hash values.
+
+For the THF component, I'll need a function that takes k, t, variant and returns everything needed for encryption: rk, w0, w1, h0, h1, rc, rc_prime, pbox, state_bytes.
+
+I can write a helper function blink_thf_setup(variant, k, t) that does all this. It combines the key schedule and hash computation from THF_Blink_Encryptor.
+
+Actually, let me just keep it all inside _BlinkTHF_CVL.__init__ since it's the only thing that will use it.
+
+OK, let me now write the code.
+
+First, let me figure out the exact structure. I'll write _BlinkTHF_CVL as a Component subclass that handles all the THF logic.
+
+class _BlinkTHF_CVL(Component):
+    def __init__(self, variant, k, t, name="BlinkTHF"):
+        # variant params
+        params = {...}
+        p = params[variant]
+        self.n = p["n"]
+        self.state_bytes = p["state_bytes"]
+        self.tweak_bytes = p["tweak_bytes"]
+        self.key_bytes = p["key_bytes"]
+        self.ra = p["ra"]
+        self.rb = p["rb"]
+        self.pbox = p["pbox"]
+        
+        # round constants
+        if self.n == 64:
+            self.rc, self.rc_prime = blink_round_constants_64()
+        else:
+            self.rc, self.rc_prime = blink_round_constants_128()
+        
+        # key schedule and hash
+        master_key = [(k >> (8*i)) & 0xFF for i in range(self.key_bytes)]
+        t_bytes = [(t >> (8*i)) & 0xFF for i in range(self.tweak_bytes)]
+        total_bits = self.key_bytes * 8
+        
+        # key_prime
+        key_prime = [0] * self.key_bytes
+        for i in range(self.key_bytes):
+            for j in range(8):
+                bit_index = (11 * (8*i + j)) % total_bits
+                byte_idx = bit_index // 8
+                bit_in_byte = bit_index % 8
+                bit_val = (master_key[byte_idx] >> bit_in_byte) & 1
+                key_prime[i] ^= (bit_val << j)
+                key_prime[i] &= 0xFF
+        
+        # w0, w1, rk
+        self.w0 = [master_key[i] for i in range(self.state_bytes)]
+        self.w1 = [master_key[i + self.state_bytes] for i in range(self.state_bytes)]
+        self.rk = []
+        for j in range(self.ra + self.rb):
+            self.rk.append([master_key[i + (j+2)*self.state_bytes] for i in range(self.state_bytes)])
+        
+        # hash keys
+        hk_len = self.state_bytes + self.tweak_bytes
+        hk0 = [0] * hk_len
+        hk1 = [0] * hk_len
+        for i in range(hk_len - 1, -1, -1):
+            if i > 0:
+                hk0[i] = ((key_prime[i] << 1) ^ (key_prime[i-1] >> 7)) & 0xFF
+                val = (key_prime[i + hk_len] << 2) & 0xFF
+                val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+                hk1[i] = (val ^ val2) & 0xFF
+            else:
+                hk0[i] = (key_prime[i] << 1) & 0xFF
+                val = (key_prime[i + hk_len] << 2) & 0xFF
+                val2 = (key_prime[i + hk_len - 1] >> 6) & 0xFF
+                hk1[i] = ((val ^ val2) & 0xFE) & 0xFF
+        
+        # hash values
+        self.h0 = self._hash_func(hk0, t_bytes)
+        self.h1 = self._hash_func(hk1, t_bytes)
+        self.h_xor = [self.h0[i] ^ self.h1[i] for i in range(self.state_bytes)]
+        
+        super().__init__(self.n, self.n, name=name)
+    
+    @staticmethod
+    def _hash_func(key, t, state_bytes, tweak_bytes):
+        # ... same as THF_Blink_Encryptor._hash_func ...
+        h = [0] * state_bytes
+        for i in range(state_bytes - 1, -1, -1):
+            h[state_bytes - 1 - i] = 0
+            for l in range(8):
+                temp = [0] * tweak_bytes
+                for j in range(tweak_bytes):
+                    left = (key[tweak_bytes + i - j] << l) & 0xFF
+                    right = (key[tweak_bytes + i - j - 1] >> (8 - l)) & 0xFF
+                    temp[tweak_bytes - 1 - j] = left ^ right
+                p = 0
+                for j in range(tweak_bytes):
+                    p ^= (t[j] & temp[j])
+                    p &= 0xFF
+                h[state_bytes - 1 - i] ^= (_HW2[p] << l)
+                h[state_bytes - 1 - i] &= 0xFF
+        return h
+    
+    # ... primitive operations ...
+    def _sub_bytes(self, state): ...
+    def _mix_columns(self, state): ...
+    # etc.
+    
+    def eval(self, x):
+        # Convert vector to bytes (little-endian)
+        state = [0] * self.state_bytes
+        for i in range(self.state_bytes):
+            b = 0
+            for j in range(8):
+                b |= (int(x[i*8 + j]) << j)
+            state[i] = b
+        
+        # THF encrypt
+        self._whitening(state, self.w0)
+        for r in range(self.ra):
+            self._sub_bytes(state)
+            self._mix_columns(state)
+            self._add_round_key(state, self.rk[r])
+            self._add_round_constant(state, _int_to_bytes(self.rc[r], self.state_bytes))
+            self._permutation(state)
+        # ... rest of construction ...
+        
+        # Convert bytes to vector
+        out = []
+        for i in range(self.state_bytes):
+            for j in range(8):
+                out.append((state[i] >> j) & 1)
+        return vector(GF(2), out)
+Wait, but vector(GF(2), out) returns a Sage vector. The Component.eval should return the same type as other components. Looking at SBox_CVL.eval:
+
+def eval(self, x):
+    return int_to_vec(self.sbox(vec_to_int(x)), self.output_length)
+It returns a vector over GF(2).
+
+For the input x, it's passed as vector(GF(2), input_current_node) in Cipher.eval. So x is a Sage vector.
+
+Converting vector to integer/bytes:
+
+vec_to_int(x) converts a GF(2) vector to integer
+int_to_vec(val, n) converts integer to GF(2) vector
+So I can use those utils.
+
+For the component, eval can be:
+
+def eval(self, x):
+    m = vec_to_int(x)
+    state = _int_to_bytes(m, self.state_bytes)
+    # ... encrypt ...
+    c = _bytes_to_int(state)
+    return int_to_vec(c, self.n)
+This is much cleaner!
+
+And for the primitive operations, I can factor them out as standalone functions or keep them as methods. Let me use methods since they're internal to the component.
+
+OK, now let me think about BLINK64_CVL and BLINK128_CVL construction.
+
+Since _BlinkTHF_CVL handles all variants, I could theoretically have a single class. But for backward compatibility, we keep two.
+
+class BLINK64_CVL:
+    def __init__(self, R=None, rks=None, round_constants=None, name=None,
+                 variant="64a", k=None, t=None):
+        if k is not None and t is not None:
+            # THF mode
+            if name is None:
+                name = f"BLINK64-{variant}"
+            block_size_bits = 64
+            block_size_words = 16
+            wordsize = 4
+            thf = _BlinkTHF_CVL(variant, k, t, name=name)
+            cipher = WordSBoxCipher(wordsize, block_size_words, block_size_words, name=name)
+            node = cipher.add_subcipher(thf, [(cipher.IN, (i, i)) for i in range(block_size_words)])
+            cipher.add_output([(node, (i, i)) for i in range(block_size_words)])
+            self.blink_cipher = cipher
+        else:
+            # SPN mode (backward compatible)
+            if R is None:
+                R = 14
+            if rks is None:
+                rks = [0 for _ in range(R + 1)]
+            if round_constants is None:
+                round_constants = [0 for _ in range(R)]
+            if name is None:
+                name = "BLINK64"
+            # ... existing SPN construction ...
+            self.blink_cipher = blink_cipher
+Wait, but _BlinkTHF_CVL is a Component with input_length=64 or 128, while the WordSBoxCipher expects edges at word granularity. Since wordsize=4 and block_size_words=16, an edge (i, i) in WordSBoxCipher.add_subcipher means bits 4i to 4i+3. And _BlinkTHF_CVL has input_length=64, so it expects 64 bits.
+
+In WordBasedCipher.add_subcipher, for a Component:
+
+return super().add_subcipher(sub_cipher=sub_cipher, edges=[
+    (a, (x*self.wordsize + o, y*self.wordsize + o))
+    for o in range(self.wordsize) for a, (x, y) in edges
+])
+So if we pass [(cipher.IN, (i, i)) for i in range(16)], the edges connect bits 4i+o of the input to bits 4i+o of the component, for o=0..3. That's a total of 64 edges, connecting all 64 bits. Perfect!
+
+And _BlinkTHF_CVL has input_length=64, output_length=64, so it's fully connected.
+
+Wait, but add_subcipher checks len(edges) == sub_cipher.input_length. For WordBasedCipher.add_subcipher, when sub_cipher is a Component, it checks against sub_cipher.input_length after expanding edges... No, let me re-read:
+
+if len(edges) != sub_cipher.input_length:
+    raise IndexError(...)
+Wait, edges here is the list passed TO add_subcipher, not the expanded list. For WordBasedCipher.add_subcipher, the edges parameter has length block_size_words = 16. But sub_cipher.input_length = 64. So len(edges) = 16 != 64, and it will raise IndexError!
+
+Oh no. The check len(edges) != sub_cipher.input_length is in the base Cipher.add_subcipher, which is called by WordBasedCipher.add_subcipher via super(). But in WordBasedCipher.add_subcipher, the edges are expanded before calling super().
+
+Wait, let me re-read:
+
+return super().add_subcipher(sub_cipher=sub_cipher, edges=[
+    (a, (x*self.wordsize + o, y*self.wordsize + o))
+    for o in range(self.wordsize) for a, (x, y) in edges
+])
+It expands the edges and passes them to super().add_subcipher. In Cipher.add_subcipher:
+
+if len(edges) != sub_cipher.input_length:
+    raise IndexError(...)
+The expanded edges list has length 16 * 4 = 64, which equals sub_cipher.input_length = 64. So it's fine!
+
+Great. So adding a single _BlinkTHF_CVL(64) component to WordSBoxCipher(4, 16, 16) works.
+
+Similarly for 128-bit: WordSBoxCipher(4, 32, 32) with _BlinkTHF_CVL(128).
+
+And is_valid will be True because we call cipher.add_output(...).
+
+For modeling, if someone tries to MILP/SAT model this, it will call _BlinkTHF_CVL.model(), which calls _model_milp or _model_sat. But these methods don't exist on _BlinkTHF_CVL, so it will fall back to Component's... wait, Component doesn't define _model_milp. So it will raise AttributeError.
+
+But for "bare minimum" that's acceptable. The user's main concern is evaluation correctness.
+
+However, I should probably add dummy _model_milp and _model_sat methods that raise NotImplementedError with a clear message, so it's intentional rather than an obscure AttributeError.
+
+Actually, looking at Component.model():
+
+def model(self, model_options):
+    if model_options.optimization == OPTIMIZATION.MILP:
+        return self._model_milp(model_options)
+    ...
+If _model_milp doesn't exist, AttributeError will be raised. I think that's fine. In Python, NotImplementedError is more appropriate, but AttributeError is also reasonable for undefined behavior.
+
+Wait, but if the user tries to blink.model(model_options) on a THF-mode cipher, it will fail. For the bare minimum, let's just add _model_milp and _model_sat that raise NotImplementedError. This is two lines each.
+
+Actually, looking at the existing code, RoundkeyXOR_CVL inherits from ConstXOR_CVL and doesn't define _model_milp... wait, it does? Let me check. ConstXOR_CVL defines _model_milp. OK.
+
+For _BlinkTHF_CVL, I'll add:
+
+def _model_milp(self, model_options):
+    raise NotImplementedError("MILP modeling not supported for the full Blink THF construction.")
+
+def _model_sat(self, model_options):
+    raise NotImplementedError("SAT modeling not supported for the full Blink THF construction.")
+OK, now about doctests. I need to add test vector doctests. Let me put them in both classes.
+
+For BLINK64_CVL:
+
+"""
+...
+
+TESTS:
+
+Test vectors (THF paper, Appendix F)::
+
+    sage: from civerly.cipher_implementations.blink import BLINK64_CVL
+    sage: from civerly.util import int_to_vec, vec_to_int
+    sage: k_64 = 0xd6a102d888a467e4d1d7dec33a246943e07c1dc6f302c57e762c2df9de6f0d216dd387874a0b52ce3022e0ad78c78a0697779021b38e7fa1
+
+    Blink-64a::
+    sage: blink = BLINK64_CVL(variant="64a", k=k_64, t=0x0123456789abcdef)
+    sage: vec_to_int(blink(int_to_vec(0x0, 64)))
+    0xa4a0d10502be846e
+
+    Blink-64b::
+    sage: blink = BLINK64_CVL(variant="64b", k=k_64, t=0x0123456789abcdef0123456789abcdef)
+    sage: vec_to_int(blink(int_to_vec(0x0, 64)))
+    0x743e142f17caaae1
+"""
+For BLINK128_CVL:
+
+"""
+...
+
+TESTS:
+
+Test vectors (THF paper, Appendix F)::
+
+    sage: from civerly.cipher_implementations.blink import BLINK128_CVL
+    sage: from civerly.util import int_to_vec, vec_to_int
+    sage: k_128 = 0xd6a102d888a467e4d1d7dec33a246943e07c1dc6f302c57e762c2df9de6f0d216dd387874a0b52ce3022e0ad78c78a0697779021b38e7fa15e2b66350517f80f2961c648d578bae174d70cb769c30a45cc40300fe8a342ca57a0bd0251ae39b621b8f104904374bbd6a102e234a664e421b8f104904374bbd6a102d888a666e4
+    sage: k_128A = 0xd6a102d888a467e4d1d7dec33a246943e07c1dc6f302c57e762c2df9de6f0d216dd387874a0b52ce3022e0ad78c78a0697779021b38e7fa15e2b66350517f80f2961c648d578bae174d70cb769c30a45cc40300fe8a342ca57a0bd0251ae39b621b8f104904374bbd6a102e234a664e421b8f104904374bbd6a102d888a666e428962a4c96893eda752c17026a6395c2d6963be43b2fc10813d73f5a4a48d28d
+
+    Blink-128a::
+    sage: blink = BLINK128_CVL(variant="128a", k=k_128, t=0x0123456789abcdef0123456789abcdef)
+    sage: vec_to_int(blink(int_to_vec(0x0, 128)))
+    0xb722eef350bb182074a6ff13c967a593
+
+    Blink-128b::
+    sage: blink = BLINK128_CVL(variant="128b", k=k_128, t=0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef)
+    sage: vec_to_int(blink(int_to_vec(0x0, 128)))
+    0x20705a38e00412165bdabcac1dcbdec2
+
+    Blink-128A::
+    sage: blink = BLINK128_CVL(variant="128A", k=k_128A, t=0x0123456789abcdef0123456789abcdef)
+    sage: vec_to_int(blink(int_to_vec(0x0, 128)))
+    0x82449f141c183601195b5046eac2b026
+
+    Blink-128B::
+    sage: blink = BLINK128_CVL(variant="128B", k=k_128A, t=0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef)
+    sage: vec_to_int(blink(int_to_vec(0x0, 128)))
+    0x8dc41b223bc8cd9923b1297dd27583fc
+"""
+Wait, but for 128A and 128B, the key is different (160 bytes vs 128 bytes). Let me check the test vectors:
+
+From documentation/blink test vecotrs.md:
+
+F.5 Blink-128A: key is the long one (160 bytes = 320 hex chars)
+F.6 Blink-128B: same key as 128A
+And from the existing code:
+
+k_128a = the 128-byte key
+k_128A = the 160-byte key
+Yes.
+
+For BLINK128_CVL, I'll define both k_128 (for 128a/128b) and k_128A (for 128A/128B) in the doctest.
+
+Now, for the backward-compatible SPN mode, the existing doctests should still work. Let me make sure I don't break them.
+
+Wait, I also need to update the module docstring to reflect that the test vectors work with the main classes.
+
+Also, I should remove THF_Blink_Encryptor and blink_thf_derive_keys. But the module docstring currently mentions THF_Blink_Encryptor. I should update that.
+
+Let me think about whether there are any other places in the codebase that import THF_Blink_Encryptor. I already checked with grep earlier and only found references in blink.py itself. So removing it is safe.
+
+OK, now the implementation plan is clear. Let me write it.
+
+Because this is a substantial rewrite of the file, I'll write a new version of the relevant sections. I'll work in chunks:
+
+First, I'll write the _BlinkTHF_CVL class
+Then modify BLINK64_CVL and BLINK128_CVL
+Remove THF_Blink_Encryptor and blink_thf_derive_keys
+Update docstrings
+Let me draft _BlinkTHF_CVL. I'll keep the primitive operations as methods, reusing the same logic from THF_Blink_Encryptor.
+
+Actually wait - for the _hash_func, I need to make it a @staticmethod or standalone function because I can't easily call instance methods without a class... Actually I can, within __init__ I just call self._hash_func(...).
+
+But _hash_func needs _HW2, which is already defined at module level.
+
+Let me also consider: should I keep THF_Blink_Encryptor around but make it private (_THF_Blink_Encryptor)? No, the user said to delete it if not necessary.
+
+Alright, let me now write the complete rewrite. I'll use a write for the entire file to avoid hundreds of small edits. But wait, the top half of the file (up to line ~450) is unchanged except for removing THF_Blink_Encryptor and blink_thf_derive_keys. The bottom half (from line 920) is where BLINK64_CVL and BLINK128_CVL are.
+
+Actually, the file is 1176 lines. Let me use a combination of edit for targeted changes and write if needed. But with the __new__ hack and the need to preserve backward compatibility, I'd rather rewrite the class definitions completely.
+
+Let me first get the exact content of the file again to see the current state after my earlier edits. I already have the file content from my reads. The current structure is:
+
+Lines 1-73: module docstring
+Lines 74-80: imports
+Lines 81-447: helper functions (including blink_thf_derive_keys)
+Lines 448-919: THF_Blink_Encryptor class
+Lines 920-1038: BLINK64_CVL
+Lines 1039-1176: BLINK128_CVL
+Wait, after my edits, blink_thf_derive_keys is at lines 451-549 and THF_Blink_Encryptor is at lines 552-919. Let me verify.
+
+Actually, from the read output above:
+
+blink_thf_derive_keys lines 451-549
+THF_Blink_Encryptor lines 552-919
+BLINK64_CVL lines 924-1038
+BLINK128_CVL lines 1041-1176
+So I need to:
+
+Remove lines 451-919 (both blink_thf_derive_keys and THF_Blink_Encryptor)
+Replace BLINK64_CVL (lines 924-1038)
+Replace BLINK128_CVL (lines 1041-1176)
+Add _BlinkTHF_CVL somewhere
+And update the module docstring.
+
+This is a large change. Let me do it with write on the whole file. But I need to be careful to preserve everything else. Actually, write is the right tool here because the changes are so extensive. I'll generate the complete new file content.
+
+But first, let me check the exact line offsets for the parts I need to change. Actually, to be safe and accurate, let me read the full file in sections.
+
+Wait, I already have the full content from the user's initial read. Let me use that as the base, but keep in mind my subsequent edits changed:
+
+format(rc_prime[0], '#018x') at line 171-172
+blink_toeplitz_hash doctest
+round_constants parameter added to BLINK64_CVL and BLINK128_CVL
+THF_Blink_Encryptor docstring expanded
+Let me read the current file from
+
+... (planning)
+
+I've analyzed the full file and need to make substantial changes. The plan is:
+
+Remove THF_Blink_Encryptor and blink_thf_derive_keys
+Add _BlinkTHF_CVL(Component) that implements the full THF encrypt in eval
+Rewrite BLINK64_CVL and BLINK128_CVL to support both THF mode (k, t provided) and backward-compatible SPN mode
+Add test vector doctests to both classes
+Update module docstring
+Because the changes affect ~700 lines, I'll rewrite the entire file. Let me compose it carefully.
+
+Key design decisions:
+
+_BlinkTHF_CVL inherits from Component (abstract base class), implements only eval() and raises NotImplementedError for MILP/SAT modeling. The THF construction is too complex to model with the existing component framework.
+BLINK64_CVL/BLINK128_CVL constructors detect THF mode when k is not None and t is not None, otherwise fall back to the SPN DAG.
+__new__ still returns self.blink_cipher (a WordSBoxCipher), preserving the existing API.
+I need to add int_to_vec and vec_to_int to the imports since _BlinkTHF_CVL.eval uses them at runtime.
+
+Let me write the file now. I'll construct it in pieces to avoid errors.
+
+Actually, let me first create a test script to verify my _BlinkTHF_CVL logic before rewriting the file. This way I can catch bugs early.
+
+I'll write a standalone script that copies the relevant functions and the new _BlinkTHF_CVL, then tests all 6 variants against the test vectors.
+
+Wait, but _BlinkTHF_CVL uses _int_to_bytes, _bytes_to_int, _BLINK_SBOX_VALUES, _M_MATRIX, _HW2, blink_round_constants_64, blink_round_constants_128, and _BLINK_P_64, _BLINK_P_128. All of these are in the file. I can import them.
+
+Actually, let me just write the file and then run doctests. If something fails, I'll fix it.
+
+Actually, to be safe, let me first write the _BlinkTHF_CVL in a small standalone test using the existing THF_Blink_Encryptor to cross-check. But THF_Blink_Encryptor works... I already verified all 6 test vectors with it.
+
+Let me just write the file. I'm confident in the logic since I'm basically moving the THF_Blink_Encryptor code into a Component.eval method.
+
+One thing to watch out for: Component is abstract and requires eval. It also has _model_milp and _model_sat called by model(). If we don't implement them, and someone calls model(), it will call _model_milp(options) which doesn't exist on the class, causing AttributeError. I'll add stubs that raise NotImplementedError.
+
+Another thing: Component.__hash__ uses self.__dict__ and excludes some keys. For _BlinkTHF_CVL, the hash should be stable. Using name in __init__ will help.
+
+Also, Component.__init__ takes input_length, output_length, name=None. So I call super().__init__(self.n, self.n, name=name).
+
+Let me now compose the complete new file. I'll write it in sections.
+
+Actually, let me just do it directly. I'll use Write for the whole file since changes are too extensive for edits.
+
+I need to preserve the top part (lines 1-449) exactly as it is now, except:
+
+Update module docstring (lines 2-75)
+Add int_to_vec, vec_to_int to imports (line 76)
+Wait, line 76 currently is:
+
+from civerly.wordsboxcipher import WordSBoxCipher
+I'll change it to:
+
+from civerly.wordsboxcipher import WordSBoxCipher
+from civerly.util import int_to_vec, vec_to_int
+And then replace everything from line 450 onwards.
+
+Let me read lines 76-449 to preserve them.
+
+... (tests with the new implementation)
+
+The error is now clear: SBoxCipher.add_subcipher rejects _BlinkTHF_CVL because it's not an allowed type. Let me read SBoxCipher.add_subcipher to see what types it allows.
+
+The error says: "TypeError: The passed sub_cipher has type <class 'civerly.cipher_implementations.blink._BlinkTHF_CVL'> and is not allowed in SBoxCiphers."
+
+So I can't add a custom Component to a WordSBoxCipher (which is a subclass of SBoxCipher). I need to either:
+
+Make _BlinkTHF_CVL inherit from one of the allowed types
+Or use a regular WordBasedCipher instead of WordSBoxCipher
+Or return a plain Cipher object instead of WordSBoxCipher
+Let me check what SBoxCipher.add_subcipher allows.
+
+... (integrating THF into BLINK64 and BLINK128)
+
+... (working out data representation errors)
+
+Done. All 100 Sage doctests pass, and the reference implementation still verifies independently.
+
+Summary of changes in src/civerly/cipher_implementations/blink.py:
+
+Removed THF_Blink_Encryptor and blink_thf_derive_keys — no longer needed because the THF logic is now inside the main cipher classes.
+Added _BlinkTHF_CVL(Component) — an internal Component subclass that:
+Runs the full Blink key schedule and Toeplitz tweak hash in __init__
+Implements the complete THF encrypt construction (whitening, forward rounds, middle, reflector, inverse rounds) in eval()
+Intentionally raises NotImplementedError for MILP/SAT modeling (the full THF construction is too complex for the existing component framework)
+Rewrote BLINK64_CVL and BLINK128_CVL with dual-mode constructors:
+THF mode: activated when k and t are supplied. Creates a Cipher containing the _BlinkTHF_CVL component. Supports all 6 variants (64a, 64b, 128a, 128b, 128A, 128B).
+SPN mode: backward-compatible bare iterated SPN (R, rks, round_constants) when no key/tweak is given.
+Added working test-vector doctests for all 6 Blink variants (Appendix F of the THF paper) directly in the class docstrings.
+Fixed broken doctests:
+blink_round_constants_64: used format(..., '#018x') to preserve leading zero
+blink_toeplitz_hash: replaced invalid byte-unaligned example with a valid n=8, tau=8 case
+Updated module docstring to reflect the new dual-mode architecture and point users to the test-vector examples.
+
