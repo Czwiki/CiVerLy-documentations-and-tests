@@ -169,3 +169,125 @@ Added a docs-oriented follow-up to documentation/README.md: it now points reader
 The update also keeps the implementation guide aligned with the class hierarchy and component restrictions described in docs/source/user_manual/implement_cipher.rst and the report behavior in docs/source/user_manual/generate_report.rst. I verified the resulting README content directly.
 
 Made changes.
+
+date: 2026-07-10T 13:00:00Z
+participants:
+- You: Henry
+- Assistant: Kilo AI, Kimi 2.6 via Neuralwatt
+topic: "Expanding planning"
+
+User:
+Please include in the @documentation/README.md , the implementation guide, a subtask. It is nessesary for this tool that the implemented ciphers can be sliced into specific rounds, i.e. from 2-9 or 1-10, to analyze those results. Please elaborate this in the working used in the file.
+
+
+The user wants me to add a new subtask to the implementation guide in documentation/README.md. The subtask should explain that implemented ciphers need to be sliceable into specific rounds (e.g., rounds 2-9 or 1-10) for analysis purposes. It should match the style and working used in the existing file.
+
+Let me first read the existing file to understand its style and content structure. (I already have the content from the read tool output.)
+
+Looking at the current structure:
+
+Choose the right base class
+Pick a file name and public class name
+Build the cipher as a DAG
+Model-friendly component choices
+AES-like indexing and layout
+Key schedule strategy
+Provide tests and examples
+Minimal template
+Modeling options and performance notes
+Common pitfalls checklist
+Where to look for examples
+Related docs pages
+The new subtask about round slicing should probably go after the DAG construction section (step 3) or around the key schedule section (step 6). Actually, looking at the flow, it makes most sense as a separate numbered step, maybe between 3 and 4, or integrated into 3. But the user said "include ... a subtask", which suggests adding it as a new numbered section.
+
+Looking at the content, after building the cipher as a DAG (step 3), and before model-friendly component choices (step 4), would be a good place. But renumbering everything is risky. Alternatively, I could add it as step 3.5 or insert it and renumber. Since the user explicitly said "subtask", and looking at how these guides usually work, I should insert it as a new numbered step.
+
+Wait, the user said "include in the ... implementation guide, a subtask". This might mean adding a subsection within an existing step, or a new numbered step. Given the importance of round slicing, I think it deserves its own numbered step, perhaps inserted after step 3 "Build the cipher as a DAG" since that's where round construction happens.
+
+Let me draft the content:
+
+4) Sliceable round construction
+Design the cipher so that individual rounds or round ranges can be extracted for isolated analysis. This is essential for analyzing truncated differentials, bounding probabilities over specific round intervals, or comparing trails across partial cipher variants.
+
+Guidelines:
+
+Build each round as a named subcipher so that round boundaries are explicit in the DAG. Avoid flattening multiple rounds into a single anonymous subcipher.
+If the round function is uniform, construct it once and add it repeatedly with add_subcipher, but ensure each instantiation is wired independently so tools can slice between any two round nodes.
+Provide an R parameter (total number of rounds) and document whether the constructor accepts a start/end round range or if slicing is done externally via the cipher graph.
+When adding outputs, ensure intermediate round states can be exposed if the analysis tool supports it. At minimum, the final round must terminate with add_output.
+If round constants or keys vary per round, store them in a list indexed by round number so that a slice from round r_start to r_end can retrieve the correct constants without recomputing the full schedule.
+Round slicing in practice:
+
+Some modeling pipelines expect a contiguous subgraph from round a to round b. Keeping the DAG layered by round makes this extraction straightforward.
+If the cipher has an initial or final whitening layer, model these as separate subciphers (or as round 0 and round R+1) so they do not interfere with round-indexed slicing.
+Test slicing by extracting a sub-cipher for rounds 2–9 (or 1–10) and verifying that is_valid remains true and that test vectors for the full cipher can be reproduced by composing the slices.
+I'll place this after step 3 and renumber subsequent steps.
+
+Now I need to add a new subtask about sliceable round construction. Looking at the current structure, the best place to insert it is after step 3 "Build the cipher as a DAG" and before step 4 "Model-friendly component choices", since round slicing is fundamentally about how the DAG is structured.
+
+I need to renumber steps 4 through 12 to 5 through 13. The edit tool requires exact string matching, so I should do this carefully.
+
+Actually, looking at the pitfalls checklist (step 10), I see there's already a bullet about "Round constants set on the wrong node or not reset per round" which is related but not the same.
+
+Let me draft the new section content:
+
+4) Sliceable round construction
+Design the cipher so that individual rounds or round ranges can be extracted for isolated analysis. This is essential for analyzing truncated differentials, bounding probabilities over specific round intervals, or comparing trails across partial cipher variants.
+
+Guidelines:
+
+Build each round as a named subcipher so that round boundaries are explicit in the DAG. Avoid flattening multiple rounds into a single anonymous subcipher.
+If the round function is uniform, construct it once and add it repeatedly with add_subcipher, but ensure each instantiation is wired independently so tools can slice between any two round nodes.
+Provide an R parameter (total number of rounds) and document whether the constructor accepts a start/end round range or if slicing is done externally via the cipher graph.
+When adding outputs, ensure intermediate round states can be exposed if the analysis tool supports it. At minimum, the final round must terminate with add_output.
+If round constants or keys vary per round, store them in a list indexed by round number so that a slice from round r_start to r_end can retrieve the correct constants without recomputing the full schedule.
+Round slicing in practice:
+
+Some modeling pipelines expect a contiguous subgraph from round a to round b. Keeping the DAG layered by round makes this extraction straightforward.
+If the cipher has an initial or final whitening layer, model these as separate subciphers (or as round 0 and round R+1) so they do not interfere with round-indexed slicing.
+Test slicing by extracting a sub-cipher for rounds 2–9 (or 1–10) and verifying that is_valid remains true and that test vectors for the full cipher can be reproduced by composing the slices.
+I'll insert this after the Pitfall: if you do not call paragraph and before ## 4) Model-friendly component choices. Then I need to renumber all subsequent sections.
+
+Wait, maybe instead of renumbering everything (which is error-prone with exact string matching), I could insert it as section 3.5 or keep it unnumbered? No, the user said "subtask" and the document uses numbered sections. I'll insert it as step 4 and renumber.
+
+Let me do this in two edits:
+
+Insert the new section 4
+Renumber sections 4->5, 5->6, etc. through 12->13
+Actually, I can do it in one big edit if I replace a large enough block. But that might be error-prone. Let me do it systematically.
+
+First, I'll insert the new content before "## 4) Model-friendly component choices".
+
+Then I'll change all the subsequent section headers.
+
+Let me verify the exact strings:
+
+"## 4) Model-friendly component choices" -> "## 5) Model-friendly component choices"
+"## 5) AES-like indexing and layout" -> "## 6) AES-like indexing and layout"
+"## 6) Key schedule strategy" -> "## 7) Key schedule strategy"
+"## 7) Provide tests and examples" -> "## 8) Provide tests and examples"
+"## 8) Minimal template" -> "## 9) Minimal template"
+"## 9) Modeling options and performance notes" -> "## 10) Modeling options and performance notes"
+"## 10) Common pitfalls checklist" -> "## 11) Common pitfalls checklist"
+"## 11) Where to look for examples" -> "## 12) Where to look for examples"
+"## 12) Related docs pages" -> "## 13) Related docs pages"
+I'll do this with multiple edits.
+
+I see - "## 5) Model-friendly component choices" is already at line 87, which means the first edit in the batch actually succeeded but reported failure? No, looking more carefully: the first replacement in the batch was "## 4) Model-friendly component choices" -> "## 5) Model-friendly component choices". But when I look at the file, it already shows "## 5) Model-friendly component choices" at line 87.
+
+Wait, let's trace back. The first big edit inserted the new section 4 and changed "## 4) Model-friendly component choices" to "## 5) Model-friendly component choices" in the same edit. So when the subsequent edit tried to change "## 4) Model-friendly component choices" to "## 5) Model-friendly component choices", it failed because that string no longer exists. But all the other edits (5->6, 6->7, etc.) succeeded.
+
+Actually, looking at the first edit again: oldString: "Pitfall: if you do not call add_output for all outputs, is_valid remains false and evaluation/modeling fails.\n\n## 4) Model-friendly component choices" newString: "...new section...\n\n## 5) Model-friendly component choices"
+
+Yes! The first edit already changed "## 4)" to "## 5)". So the file state is now correct. All sections have been properly renumbered. Let me verify by checking the end of the file.
+
+Done. I inserted a new section "4) Sliceable round construction" into documentation/README.md and renumbered the subsequent sections accordingly.
+
+The new section covers:
+
+Building each round as a named subcipher so round boundaries are explicit in the DAG.
+Wiring round instantiations independently to enable slicing between any two round nodes.
+Keeping round constants/keys in a round-indexed list for easy extraction of ranges like 2–9 or 1–10.
+Modeling initial/final whitening as separate subciphers so they don't interfere with round-indexed slicing.
+Testing slices by verifying is_valid and matching full-cipher test vectors.
+
