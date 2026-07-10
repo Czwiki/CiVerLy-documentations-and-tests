@@ -1,0 +1,8 @@
+Number of matching output differences for 2 rounds: 4194304.000000
+Differential probability ≈ 2^(-10.00)
+Number of matching output differences for 3 rounds: 65536.000000
+Differential probability ≈ 2^(-16.00)
+Number of matching output differences for 4 rounds: 4.000000
+Differential probability ≈ 2^(-30.00)
+Number of matching output differences for 5 rounds: 0.000000
+Differential probability ≈ 2^(-inf)
