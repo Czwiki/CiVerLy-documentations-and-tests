@@ -6,3 +6,5 @@ Number of matching output differences for 4 rounds: 4.000000
 Differential probability ≈ 2^(-30.00)
 Number of matching output differences for 5 rounds: 0.000000
 Differential probability ≈ 2^(-inf)
+Number of matching output differences for 6 rounds: 2.000000
+Differential probability ≈ 2^(-31.00)
