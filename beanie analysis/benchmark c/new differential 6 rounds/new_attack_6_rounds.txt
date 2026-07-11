@@ -1,0 +1,11 @@
+Number of matching output differences: 0.000000
+Number of matching output differences: 0.000000
+Number of matching output differences: 0.000000
+Number of matching output differences: 0.000000
+Number of matching output differences: 4.000000
+Number of matching output differences: 6.000000
+Number of matching output differences: 6.000000
+Number of matching output differences: 6.000000
+Number of matching output differences: 8.000000
+Number of matching output differences: 8.000000
+Differential probability ≈ 2^(-32.32)
