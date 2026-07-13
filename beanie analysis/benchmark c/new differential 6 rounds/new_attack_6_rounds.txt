@@ -9,3 +9,213 @@ Number of matching output differences: 6.000000
 Number of matching output differences: 8.000000
 Number of matching output differences: 8.000000
 Differential probability ≈ 2^(-32.32)
+
+
+Key: 0000000076b4f57a ffffffffc7fe3be5
+Number of matching output differences: 0.000000
+Key: 000000003d5237ab 000000005c95d5b6
+Number of matching output differences: 2.000000
+Key: 000000007c0c723e 00000000657de130
+Number of matching output differences: 4.000000
+Key: 000000006f3dd9fa 0000000056db284d
+Number of matching output differences: 4.000000
+Key: 0000000057ef4fdd ffffffffb1cd697f
+Number of matching output differences: 4.000000
+Key: 00000000003e05e4 000000004c43e965
+Number of matching output differences: 4.000000
+Key: 000000003299fb8b ffffffffbca34e1a
+Number of matching output differences: 4.000000
+Key: 000000002701be6d ffffffffef5054a8
+Number of matching output differences: 4.000000
+Key: 000000000eb303b7 0000000048f974d1
+Number of matching output differences: 4.000000
+Key: 000000006b1f9dfc 000000000b863f46
+Number of matching output differences: 8.000000
+Differential probability ≈ 2^(-32.32)
+
+
+Key: fffffffff67f0ac7 fffffffff4f36ea9
+Number of matching output differences: 2.000000
+Key: ffffffffd15d957b ffffffffeeca4a0d
+Number of matching output differences: 2.000000
+Key: ffffffffeb1c5879 0000000003adfaf7
+Number of matching output differences: 6.000000
+Key: fffffffffae7ae07 00000000475b4547
+Number of matching output differences: 10.000000
+Key: fffffffffd9dc616 000000007c15ed04
+Number of matching output differences: 10.000000
+Key: 0000000033e0ffd0 ffffffff98a53fa5
+Number of matching output differences: 14.000000
+Key: ffffffffc9e9b6a0 fffffffff0f28b9c
+Number of matching output differences: 18.000000
+Key: ffffffffb5d29215 0000000037436a97
+Number of matching output differences: 18.000000
+Key: 0000000061e74758 fffffffffdd965cf
+Number of matching output differences: 20.000000
+Key: ffffffffb10118ad 000000003593bb78
+Number of matching output differences: 26.000000
+Differential probability ≈ 2^(-30.62)
+
+Key: 45c04fd792634274 2c1002d14bea51b2
+Tweak: a2bac2135ab34805 df9d44d2c7466dc9
+Number of matching output differences: 2.000000
+Key: 44c292aea23e74e8 9721b7ff98af33f7
+Tweak: f212625c591818a6 33693f980ccf23fb
+Number of matching output differences: 2.000000
+Key: db7ebcd6d0c536a0 307324361704a018
+Tweak: 3d36baa92172df12 d688c45a9d8b4600
+Number of matching output differences: 4.000000
+Key: ed7308cd777295ef 9bea835c8b05afee
+Tweak: 939fe56ca6150dfc 4e92c5b77ea9e101
+Number of matching output differences: 6.000000
+Key: 3a89ff455380dffc 60d0fd41371f26e0
+Tweak: 0bf5cb81375d9d05 367a74ebfb4a3bde
+Number of matching output differences: 6.000000
+Key: e9e223f28b654f8b a08b4eac0d15c5c3
+Tweak: ef3fad716bc6cd19 9e926993bb3efaea
+Number of matching output differences: 6.000000
+Key: 22cadbe9d5e9a711 0fbdf470f5c09709
+Tweak: fa4aa19ccbfa45f4 0f479dff3234f038
+Number of matching output differences: 8.000000
+Key: 2e252e0d0fb8dceb b30153194c1391f6
+Tweak: d6d628c0ce5675ca 64dd72b7810678ce
+Number of matching output differences: 8.000000
+Key: 83496fbeeb59b641 e06db5ea006a288d
+Tweak: b05f6c9d21cd8ba9 1988865bcd2a96d1
+Number of matching output differences: 8.000000
+Key: cb68fdc12bb6c5e7 f4175b8c1f994883
+Tweak: e0bb29f89b740fa7 8f0923d44e749e10
+Number of matching output differences: 8.000000
+Differential probability ≈ 2^(-32.32)
+
+
+Key: f0c6406e8062a267 7813c57c34eaf0cb
+Tweak: 0dcb20714ad720a6 9b159b42bdcb0a78
+Number of matching output differences: 0.000000
+Key: c983e0fe9f7cd194 920c2e0b1df9a3eb
+Tweak: 564d94023a9cb84d 2051817d3361847e
+Number of matching output differences: 0.000000
+Key: 0b51f270cab8c922 6db9b4f7cf6b91e9
+Tweak: cb2945baac0b7113 c7523862f0561568
+Number of matching output differences: 0.000000
+Key: 47d21745fbd1f20d 8774cc4dec4c2b4a
+Tweak: f224d50683de06ac 7f478c41960d7fdf
+Number of matching output differences: 0.000000
+Key: 6069b43e7ab561fc 587b1e897b28d529
+Tweak: f3d9716cb23608f0 ffc10c6a8f51f3a8
+Number of matching output differences: 2.000000
+Key: 8e2d6e4e5a12d184 f98f72f997d9df69
+Tweak: 0aa5cc417350224f 4c9e38da4bfc446c
+Number of matching output differences: 2.000000
+Key: f9167349f84b6620 ec8acd4abe0f4432
+Tweak: ce4ce313ca4960cc 72c199fc1ec320f6
+Number of matching output differences: 2.000000
+Key: 3c8af2934f62d82b 81b88ab9338924ae
+Tweak: 965c38da83c35bc3 926f6b6781a7e40a
+Number of matching output differences: 6.000000
+Key: a21e75ce6077a19e 2facf74fddb278ab
+Tweak: ece88260aae7ba9b 9148aa917d97323f
+Number of matching output differences: 6.000000
+Key: 63138e9df5db3cea ff53aae898f41e1b
+Tweak: aeef30e1da7ce0da 6d19ca0fa9ab9954
+Number of matching output differences: 8.000000
+Differential probability ≈ 2^(-32.32)
+
+
+Key: 6b7b1b609874f34e d67e0af88f53cc5d
+Tweak: c8af7bf81ed4efab 08e4bc3b4c4cf038
+Number of matching output differences: 0.000000
+Key: 5f2bc47d9c4695b2 8e10591d92d656b8
+Tweak: 5c4c1e5222d90da0 25a51123835c2ea9
+Number of matching output differences: 2.000000
+Key: 2f8b442ace05ddda 502ae8f85be01585
+Tweak: 5fc4aea200803f1f 89564b00e02a9b13
+Number of matching output differences: 6.000000
+Key: e36908942315ad48 0d4fa394de6dab31
+Tweak: 752c76d1ea3e3a4e 4d712cccc84fbbd7
+Number of matching output differences: 8.000000
+Key: a37f9e883c24768e cdb1592f019f0191
+Tweak: 00a30dd8f1053113 f81731cfc7a37b6d
+Number of matching output differences: 10.000000
+Key: 631d5569df698957 21ddc3e4733ad350
+Tweak: 0914e588c53f518f 2a30cd6ebe6d70e3
+Number of matching output differences: 12.000000
+Key: b72c4e73b8fb69f7 f30d9db1c075eaae
+Tweak: d7b327c8d28db327 8f94d43840010139
+Number of matching output differences: 14.000000
+Key: d027bc3767c60141 f3fb0c3269c67bda
+Tweak: fd7004d55b3a4074 9fa07d766cb5c81c
+Number of matching output differences: 16.000000
+Key: 47966ea6a5b0a1ef ee2f3c44258757ce
+Tweak: f8fb193d5d6463e8 b5ea7c40f0760910
+Number of matching output differences: 16.000000
+Key: ae76d2cdb3d3fe3b 37cfaa692b5a1ebd
+Tweak: e41777718d9d704a e70720a654290816
+Number of matching output differences: 16.000000
+Differential probability ≈ 2^(-31.32)
+
+
+Key: a96dd7812344bec9 bdc78bd98587b422
+Tweak: 998ae748ac2bb5ae e197bc4c91a572f8
+Number of matching output differences: 2.000000
+Key: 8e81a705ea8d1e5c b689186826edfff1
+Tweak: 296c664cf69a8eb7 7fbc1d46a7f49c42
+Number of matching output differences: 2.000000
+Key: f1642d9ac7d4cc72 331a3b27e6cf1121
+Tweak: 40a049c1744949eb 5f6ae6373a286a0b
+Number of matching output differences: 2.000000
+Key: 29583c3bc1f22f70 06902bf811eaf113
+Tweak: 82e58b27268d18d3 d8231c7712d61de8
+Number of matching output differences: 4.000000
+Key: 0c5d8e1f63cd5228 9fb1c23a600c1fc4
+Tweak: 62b79bb787db5246 372ac9c13b50044b
+Number of matching output differences: 4.000000
+Key: c24b2c1e0e57f024 44755b589264e115
+Tweak: 0bfe49f192520e19 183dfcd488b8144e
+Number of matching output differences: 4.000000
+Key: 350f1f8326a87e33 1238464a55bbf020
+Tweak: c2eaf66c7a1108ad 7bbcc1ca5173acb1
+Number of matching output differences: 4.000000
+Key: 6753dce1e70819c3 7510bf9681058df2
+Tweak: 053e2002a08e2b4c 76a5335da3ae410c
+Number of matching output differences: 4.000000
+Key: b880e253a02f8497 18f78d355c74973a
+Tweak: 6e6a8983abcc7f55 9d0092fa9e351e28
+Number of matching output differences: 6.000000
+Key: 6d581f8f9ebcd76c f16aa970d492b420
+Tweak: 36f97be5e50989a9 b4aaadd46966584e
+Number of matching output differences: 6.000000
+Differential probability ≈ 2^(-32.74)
+
+
+Key: ccdec3bf9a6b5c11 87e5f75c6c63f3c0
+Tweak: 826f3621f608bdc4 aabe085f74c6fb91
+Number of matching output differences: 2.000000
+Key: 82eab9ca7d82f60b 92e3aa4fc56c1a5e
+Tweak: 152700eb7fa52887 8cc9b76e8a00e36a
+Number of matching output differences: 6.000000
+Key: 4b0dee5a917fb68f 9a77bcf7b4ab157c
+Tweak: 3e0b16cf4bfcd7c9 562978ee50ee1b7f
+Number of matching output differences: 6.000000
+Key: 86580d9fe206a008 b45a2d8e2e94a7de
+Tweak: 5ba37ca50066a826 ca36e9cffe41bf84
+Number of matching output differences: 6.000000
+Key: 1a75c2968157c9f6 59314a4d44d92e7a
+Tweak: e481f62c89a4b97e 609ee65bcfddcca2
+Number of matching output differences: 10.000000
+Key: efb555b81e6e214c 70a49cda20a70f5c
+Tweak: d2ef34aab5e90e45 c4a759f650397f38
+Number of matching output differences: 12.000000
+Key: f3baa08b725fdbde fd1a62406c8060f9
+Tweak: 52982fb94f619bdc cf48d531b38fc5b4
+Number of matching output differences: 12.000000
+Key: 72297bb836f5635a 966e21d3f645345f
+Tweak: c39e8253b79ebb35 ed4dd06b1d9b1d62
+Number of matching output differences: 14.000000
+Key: 95e78c81fd4d6227 6bbf849b773db165
+Tweak: f2a352e3f93a6956 15402842f2603dd6
+Number of matching output differences: 16.000000
+Key: 1cf7b2b853725cb5 eefd58633df1864a
+Tweak: 70877ea439c5e500 e75dc8c1d7dff1ed
+Number of matching output differences: 18.000000
+Differential probability ≈ 2^(-31.15)
