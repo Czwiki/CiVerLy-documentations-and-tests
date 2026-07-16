@@ -1968,3 +1968,1627 @@ Test vector 2: round keys 93061e07, 87607a4d, ..., 66a7801a, plaintext 0x1841938
 ---------
 second commit
 ---------
+
+date: 2026-07-10T 13:00:00Z
+participants:
+- You: Henry
+- Assistant: Kilo AI, Kimi 2.6 via Neuralwatt
+topic: "BEANIE U-shape attack implementation"
+
+User:
+Please refine the implementation of beanie in @src/civerly/cipher_implementations/beanie.py  to perform the U-shape attack from @documentation/U_shape_attack.md  by passing optional parameters (for the rl and rr rounds) to the constructor for an object. You can find a reference implementation in different languages @documentation/beanie.py , @documentation/beanie.c  and @documentation/beanie.h  and further information @documentation/Beanie.md to derive the inverse function. If you need further information, please come forward.
+
+Let me analyze the task:
+
+The user wants to refine the BEANIE_CVL implementation in src/civerly/cipher_implementations/beanie.py to support a U-shape attack.
+The U-shape attack involves: U(P) = E^{-1}_{K,T'}(E_{K,T}(P)) = C
+Need to pass optional parameters rl and rr to specify round counts for left and right branches.
+Need to derive the inverse function from the BEANIE specification/documentation.
+The constructor currently takes R (total rounds), rks (round keys), and name.
+From the U-shape attack documentation:
+
+P → E_{K,T}(P) = C → E^{-1}_{K,T'}(C) = C (actually = something, not necessarily C, but let's call it C')
+The left branch is E_{K,T} with rl rounds
+The right branch is E^{-1}_{K,T'} with rr rounds
+Both branches get shortened by the same number of rounds from a full R-round cipher
+The reduced round R' is always applied in the last round
+So if we have a full R-round cipher, a U-shape with rl and rr means:
+
+Left branch: rl rounds of encryption with tweak T
+Right branch: rr rounds of decryption with tweak T' (different round keys)
+But wait, the documentation says "the reduced round R' is always applied in the last round" - meaning the left branch ends with the incomplete last round (no MixColumns), and the right branch starts with the incomplete first round (inverse of R').
+
+Let me think about how to model this in the CiVerLy framework. The current BEANIE_CVL inherits from AESlike through __new__. We need to extend this to optionally build a U-shape cipher.
+
+Actually, looking more carefully at the current code:
+
+BEANIE_CVL.__new__ returns instance.beanie_cipher, which is an AESlike object
+So the constructor builds an AESlike cipher graph
+For the U-shape attack, we need to build a cipher that represents E^{-1}_{K,T'} ◦ E_{K,T}.
+
+To do this properly in the CiVerLy framework, I need to understand the components available. Let me look at the existing codebase to understand AESlike, RoundkeyXOR_CVL, etc.
+
+Wait, I should first explore more of the codebase to understand how inverse operations are modeled. Let me search for similar ciphers or inverse implementations.
+
+Actually, let me think about this differently. The user wants optional parameters for rl and rr rounds in the constructor. If these are provided, it should build the U-shape cipher instead of (or in addition to) the normal cipher.
+
+From the documentation/beanie.py and beanie.c, I can see the inverse operations:
+
+_sbox32_inv
+Inverse shift is the same as shift (since it's swapping rows 1 and 3, which is its own inverse)
+Inverse mix columns: the matrix is involutory (self-inverse), as noted in beanie.c: "Since mds matrix is involutive, we can as in the encryption"
+Wait, in the C code comment on line 184: "Since mds matrix is involutive, we can as in the encryption". That means mixColumns is its own inverse. Let me verify this from the spec: "an involuntary 4×4 MDS matrix M [JPST17a]" - yes, it's involutory.
+
+So for decryption:
+
+XOR with last round key
+Shift (involutory)
+SBox inverse
+XOR with previous round key
+For each remaining round (in reverse): MixColumns, Shift, SBox_inv, XOR with round key
+Now, the U-shape attack setting:
+
+We have encryption with tweak T for rl rounds
+Then decryption with tweak T' for rr rounds
+The total is rl + rr rounds in the U-shape
+But the round structure needs special handling. For the left branch (encryption):
+
+If rl < R (full rounds), the last round of the left branch is the special last round (no MixColumns) if it's the actual last round. But in U-shape, the middle connection happens at some point.
+Actually, let me re-read the U-shape documentation: "However, the reduced round R' is always applied in the last round." "In this context, we view U = E^{-1}{K,T'} ◦ E{K,T} as an encryption scheme" "both branches get shortened by the same number of rounds. However, the reduced round R' is always applied in the last round."
+
+Hmm, this is a bit confusing. Let me re-read: "For a cipher E_{K,T}(P) = C ... the attacker queries the MMU to decrypt C with a different tweak T'."
+
+So normally, the full cipher is R rounds: R^{r-1} ◦ R' (where R' is the last round without MixColumns).
+
+In U-shape with left branch rl and right branch rr:
+
+Left branch: rl rounds of encryption with tweak T
+Right branch: rr rounds of decryption with tweak T'
+The question is: what does the round structure look like for partial branches?
+
+From the documentation: "both branches get shortened by the same number of rounds. However, the reduced round R' is always applied in the last round."
+
+I think this means in a full 5-round cipher, the rounds are: R0, R1, R2, R3, R4' (where R4' is the last round without MixColumns).
+
+If we have a U-shape with rl=2 and rr=2, that might mean:
+
+Left branch: first 2 rounds of encryption (R0, R1)
+Right branch: last 2 rounds of decryption (inverse of R3', R2? or R4', R3?)
+Actually, the last round is always the reduced round R'. So if the left branch ends at the connection point and the right branch starts there...
+
+Let me think about the attack scenario more carefully. The attacker:
+
+Encrypts plaintext P with tweak T for the full cipher: C = E_{K,T}(P). But C is not available.
+Instead, the attacker can decrypt with a different tweak T': P' = E^{-1}_{K,T'}(C) where C is unknown.
+But the attacker can query E^{-1}_{K,T'}(E_{K,T}(P)) for chosen P.
+Wait, actually the attacker doesn't know C. The model is:
+
+Attacker chooses P
+System computes C = E_{K,T}(P) internally
+Attacker queries to decrypt C with tweak T'
+System returns P' = E^{-1}_{K,T'}(C)
+So attacker sees P → P' = E^{-1}{K,T'}(E{K,T}(P))
+For a reduced version with rl rounds left and rr rounds right:
+
+Left branch computes rl rounds of encryption: C_mid = E_{K,T}^{(rl)}(P)
+Right branch computes rr rounds of decryption: P' = (E_{K,T'}^{(rr)})^{-1}(C_mid)
+But wait, what are the round structures for partial encryption/decryption?
+
+From: "both branches get shortened by the same number of rounds. However, the reduced round R' is always applied in the last round."
+
+If full = 5 rounds: R0, R1, R2, R3, R4' If we shorten by 0 (full U): left = 5 rounds (R0-R4'), right = 5 rounds (inverse of R4'-R0) If we shorten by 1: left = 4 rounds (R0-R3), right = 4 rounds If we shorten by 2: left = 3 rounds (R0-R2), right = 3 rounds
+
+But we also have rl and rr potentially being different! Looking at Table 7:
+
+rl \ rr 0 1 2 3 4 5
+1  2  4  12  22  32  34
+2  10 12  20  26  40
+So rl and rr can be asymmetric! For example, rl=1, rr=2 means 1 round left + 2 rounds right.
+
+Since "the reduced round R' is always applied in the last round", I think:
+
+For any left branch, if rl rounds are used, the last round of the left branch is the reduced round R' (no MixColumns). This only applies if rl is the actual last round position...
+Actually, I think the simplest interpretation is:
+
+Left branch: rl rounds of the encryption process. If rl == R, the last round is R' (no MixColumns). If rl < R, it's rl full rounds.
+Right branch: rr rounds of the decryption process. If rr == R, it starts with the inverse of R'.
+Wait no, the right branch in decryption starts with the last operation of encryption: XOR with final round key, then shift, then SBox_inv, etc.
+
+For a standard R-round BEANIE decryption, the order is:
+
+C XOR k_R
+Shift
+SBox_inv
+XOR k_{R-1}
+MixColumns
+Shift
+SBox_inv
+XOR k_{R-2} ...
+MixColumns
+Shift
+SBox_inv
+XOR k_0
+So the "first round" of decryption corresponds to the inverse of the last round R'.
+
+For the U-shape right branch with rr rounds: we take the last rr rounds of decryption.
+
+rr=1: C XOR k_R', Shift, SBox_inv (wait, this is just one operation block)
+Actually, looking at the structure again. The decryption "first round" is:
+
+state ^= key[R];
+state = shift(state);
+state = sbox_inv(state);
+state ^= key[R-1];
+and the loop for rounds R-2 down to 0 is:
+
+state = mixColumns(state);
+state = shift(state);
+state = sbox_inv(state);
+state ^= key[round];
+So for rr rounds of decryption:
+
+If rr = 1: just the first block: XOR k_{R-1+rr}, shift, sbox_inv, XOR k_{R-1} Wait no, for rr=1, we start from the "last round" and do 1 round "backwards".
+Actually in standard decryption (R rounds total), there are R "blocks":
+
+Block 0 (inverse of R'): XOR k_R, shift, sbox_inv, XOR k_{R-1}
+Block 1 (inverse of R_{R-2}): mixColumns, shift, sbox_inv, XOR k_{R-2}
+Block 2: mixColumns, shift, sbox_inv, XOR k_{R-3}
+...
+Block R-1: mixColumns, shift, sbox_inv, XOR k_0
+Wait, that's not right either. Let me look at the C code more carefully:
+
+state_t dec(state_t state, const state_t* key, uint8_t R) {
+  if (R == 0) return state;
+  
+  // First block (inverse of last encryption round R')
+  state.state ^= key[R].state;
+  state.state = shift(state.state);
+  state = sbox_inv(state);
+  state.state ^= key[R-1].state;
+
+  // Remaining rounds
+  for (round = R-2; round >= 0; --round) {
+    state = mixColumns(state);
+    state.state = shift(state.state);
+    state = sbox_inv(state);
+    state.state ^= key[round].state;
+  }
+  return state;
+}
+For R=5:
+
+First: XOR k5, shift, sbox_inv, XOR k4
+Loop round=3: mixColumns, shift, sbox_inv, XOR k3
+Loop round=2: mixColumns, shift, sbox_inv, XOR k2
+Loop round=1: mixColumns, shift, sbox_inv, XOR k1
+Loop round=0: mixColumns, shift, sbox_inv, XOR k0
+So the round keys used in decryption are: k5, k4, k3, k2, k1, k0. And the operations for each "decryption round" (starting from round R down to 1):
+
+Round 5 (inverse of R'): XOR k5, shift, sbox_inv, XOR k4
+Round 4 (inverse of R3): mixColumns, shift, sbox_inv, XOR k3
+Round 3 (inverse of R2): mixColumns, shift, sbox_inv, XOR k2
+Round 2 (inverse of R1): mixColumns, shift, sbox_inv, XOR k1
+Round 1 (inverse of R0): mixColumns, shift, sbox_inv, XOR k0
+For the U-shape right branch with rr rounds: we get the last rr decryption blocks. But the tweak-key schedule produces different round keys for T'!
+
+Wait, the documentation says "the round tweak-keys used in E_{K,T} and E^{-1}_{K,T'} are independent due to the strong tweak-key schedule."
+
+So for the left branch we use round keys derived from (K, T), and for the right branch we use round keys derived from (K, T').
+
+Now, how should this be exposed in the constructor? The current constructor takes rks as round keys for the encryption. For the U-shape, we need round keys for both branches, or we need a way to specify tweaks.
+
+Looking at the user's request: "by passing optional parameters (for the rl and rr rounds) to the constructor"
+
+I think the approach should be:
+
+Keep existing parameters: R, rks, name
+Add optional parameters: rl=None, rr=None, rks_right=None, tweak_left=None, tweak_right=None, etc.
+Actually, let me look at how CiVerLy typically handles such things and what components are available.
+
+Let me explore the codebase first to understand the component models, especially for inverse operations.
+
+...(reading files)
+
+Let me check the LinearLayer_CVL.inv() method and also look at how SKINNY handles the tweak schedule, since it might give patterns for more complex cipher constructions.
+
+Now I have a good understanding. Let me think carefully about how to build the U-shape cipher.
+
+The current BEANIE_CVL builds a forward-only cipher. For the U-shape, I need to build U(P) = E^{-1}_{K,T'}(E_{K,T}(P)).
+
+But there's a key subtlety: the user said "by passing optional parameters (for the rl and rr rounds) to the constructor". This suggests:
+
+If rl and rr are not given, behave exactly as before.
+If given, build a U-shape cipher with rl rounds on the left branch and rr rounds on the right branch.
+Wait, let me re-read the user's request carefully: "refine the implementation ... to perform the U-shape attack ... by passing optional parameters (for the rl and rr rounds) to the constructor for an object."
+
+The U-shape attack is described in the documentation. The key thing is: U = E^{-1}_{K,T'} ◦ E_{K,T}
+
+For modeling purposes in CiVerLy, we want to model this as a single cipher graph. This requires us to build the inverse of the right branch.
+
+The decryption of BEANIE (from documentation/beanie.c):
+
+state ^= key[R];
+state = shift(state);
+state = sbox_inv(state);
+state ^= key[R-1];
+Loop from R-2 down to 0:
+state = mixColumns(state);
+state = shift(state);
+state = sbox_inv(state);
+state ^= key[round];
+For rr rounds of decryption, we need the last rr "decryption blocks":
+
+rr=1: XOR with k_R, shift, sbox_inv, XOR with k_{R-1}
+rr=2: plus: mixColumns, shift, sbox_inv, XOR with k_{R-2}
+etc.
+But since the U-shape uses independent round keys for the right branch (from T'), we need to specify those round keys too.
+
+So the constructor might look like:
+
+def __init__(self, R=5, rks=None, name=None, rl=None, rr=None, rks_right=None):
+If rl and rr are provided, we build the U-shape cipher.
+
+Now, how should the round keys be structured?
+
+For the left branch with rl rounds: needs rl + 1 round keys (k0 ... k_rl)
+For the right branch with rr rounds: needs rr + 1 round keys (k'_0 ... k'_rr)
+Actually wait - for rr rounds of decryption starting from the bottom:
+
+If rr=1: This is the inverse of the last encryption round. It uses keys k_R and k_{R-1} where R is the number of rounds in the original cipher, but in a reduced scenario...
+Hmm, let me think again. The text says: "In this context, we view U = E^{-1}{K,T'} ◦ E{K,T} as an encryption scheme... both branches get shortened by the same number of rounds. However, the reduced round R' is always applied in the last round."
+
+Wait, I might be overcomplicating this. The user probably wants something like:
+
+rl rounds of normal BEANIE encryption
+rr rounds of BEANIE decryption
+And the round keys for each branch are provided. Let me look at what test vectors or patterns would help.
+
+Actually, the most important thing is: the CiVerLy framework models ciphers as graphs of components. For cryptanalysis (finding differential/linear trails), we need to model the inverse operations too.
+
+For the U-shape, we need:
+
+Left branch (rl rounds of encryption):
+If rl == R (full rounds): use normal last round (no MixColumns)
+If rl < R: all rounds are full rounds (with MixColumns)
+Actually no, the text explicitly says "the reduced round R' is always applied in the last round". So regardless of how many rounds, the last round is always the reduced round.
+
+For left branch with rl rounds:
+
+Rounds 0 to rl-2: full rounds (KeyAdd -> SBox -> ShiftRows -> MixColumns)
+Round rl-1: reduced round (KeyAdd -> SBox -> ShiftRows -> KeyAdd)
+Wait, that's exactly what the current implementation does for R rounds! It has R-1 full rounds and 1 reduced round.
+
+So for the left branch with rl rounds, it's just the first rl rounds of encryption.
+
+Right branch (rr rounds of decryption): This is the tricky part. We need to invert the operations.
+For a single full round encryption: KeyAdd -> SBox -> ShiftRows -> MixColumns Its inverse is: MixColumns -> ShiftRows_inv -> SBox_inv -> KeyAdd
+
+Wait, is ShiftRows its own inverse? Yes, because [0,5,2,7,4,1,6,3] applied twice gives [0,1,2,3,4,5,6,7].
+
+And MixColumns is its own inverse (involutory).
+
+So the inverse of a full round is: MixColumns -> ShiftRows -> SBox_inv -> KeyAdd.
+
+For the reduced last round (encryption): KeyAdd -> SBox -> ShiftRows -> KeyAdd Its inverse is: KeyAdd -> ShiftRows -> SBox_inv -> KeyAdd.
+
+But wait, in the standard decryption code:
+
+// First block
+state ^= key[R];
+state = shift(state);
+state = sbox_inv(state);
+state ^= key[R-1];
+// Loop
+for (round = R-2; round >= 0; --round) {
+    state = mixColumns(state);
+    state = shift(state);
+    state = sbox_inv(state);
+    state ^= key[round];
+}
+So for rr rounds of decryption from a full R-round cipher:
+
+The decryption always starts with the inverse of the reduced last round: XOR k_R, shift, sbox_inv, XOR k_{R-1}
+Then continues with inverses of full rounds.
+If we do rr rounds of decryption, we use:
+
+rr=1: XOR k_R, shift, sbox_inv, XOR k_{R-1}
+rr=2: XOR k_R, shift, sbox_inv, XOR k_{R-1}, mixColumns, shift, sbox_inv, XOR k_{R-2}
+rr=3: XOR k_R, shift, sbox_inv, XOR k_{R-1}, mixColumns, shift, sbox_inv, XOR k_{R-2}, mixColumns, shift, sbox_inv, XOR k_{R-3}
+So the round keys for decryption are: k_R, k_{R-1}, k_{R-2}, ..., k_{R-rr} And the structure is:
+
+First block: no mixColumns
+Remaining blocks: each is mixColumns, shift, sbox_inv, XOR key
+But in the U-shape attack, the right branch uses round keys from T', not T. And the total number of rounds in each branch can be different from the full R.
+
+For a left branch with rl rounds of encryption:
+
+Rounds 0 to rl-2: full rounds with keys k_0, k_1, ..., k_{rl-2}
+Round rl-1 (reduced): keys k_{rl-1} (before SBox) and k_rl (after ShiftRows)
+For a right branch with rr rounds of decryption from a cipher with rr total rounds:
+
+The round keys would be k'_0, k'_1, ..., k'_rr where rr is the number of rounds.
+First block (inverse of reduced round): XOR k'rr, shift, sbox_inv, XOR k'{rr-1}
+Remaining blocks: mixColumns, shift, sbox_inv, XOR k'_{rr-2}, ..., mixColumns, shift, sbox_inv, XOR k'_0
+Wait, I think the user just wants the ability to build a U-shape cipher with arbitrary round keys for both branches, not necessarily deriving them from a tweak-key schedule. The current constructor already takes round keys as a black box (rks). We can add rks_left and rks_right.
+
+Actually, looking at the user's request again: "by passing optional parameters (for the rl and rr rounds) to the constructor". They don't mention separate key parameters, so maybe we can just use rks for the left branch and add a new parameter for the right branch.
+
+Let me think about what the simplest and most useful interface would be:
+
+class BEANIE_CVL:
+    def __init__(self, R=5, rks=None, name=None, rl=None, rr=None, rks_right=None):
+Where:
+
+If rl and rr are None: normal behavior (existing code)
+If rl and rr are provided: build U-shape with rl left rounds and rr right rounds
+rks is used for the left branch (must have length rl + 1)
+rks_right is used for the right branch (must have length rr + 1)
+Now I need to figure out how to build the inverse of BEANIE rounds in the CiVerLy framework.
+
+The CiVerLy framework doesn't automatically compute cipher inverses. We need to manually construct the inverse graph. For each component:
+
+RoundkeyXOR_CVL is its own inverse (since XOR is involutory)
+SBox_CVL: need inverse S-box
+PermuteLayer_CVL: shiftrows.inv() (but shiftrows is its own inverse)
+LinearLayer_CVL: mixcolumn.inv() (but mixcolumn is its own inverse since the matrix is involutory)
+So for the inverse of a full round (KeyAdd -> SBox -> ShiftRows -> MixColumns): The inverse is: MixColumns -> ShiftRows -> SBox_inv -> KeyAdd.
+
+Wait, actually in terms of data flow, if encryption does: state -> KeyAdd(k_i) -> SBox -> ShiftRows -> MixColumns -> state_next
+
+Then decryption does: state_next -> MixColumns -> ShiftRows -> SBox_inv -> KeyAdd(k_i) -> state
+
+But the standard decryption starts from the end: state = C state ^= k_R state = shift(state) state = sbox_inv(state) state ^= k_{R-1} state = mixColumns(state) ...
+
+Hmm, actually in CiVerLy, we build the graph in the forward direction. For the right branch of U-shape, we want to model: state (from left branch) -> decryption operations -> output
+
+So for the first decryption "round" (inverse of last encryption round): state -> RoundkeyXOR(k'rr) -> ShiftRows -> SBox_inv -> RoundkeyXOR(k'{rr-1}) Then for each remaining decryption round: -> MixColumns -> ShiftRows -> SBox_inv -> RoundkeyXOR(k'_{i})
+
+Wait, let me re-check the C code for decryption:
+
+state ^= key[R];       // RoundkeyXOR with k_R
+state = shift(state);  // ShiftRows
+state = sbox_inv(state); // SBox_inv
+state ^= key[R-1];     // RoundkeyXOR with k_{R-1}
+
+for (round = R-2; round >= 0; --round) {
+    state = mixColumns(state);  // MixColumns
+    state = shift(state);       // ShiftRows
+    state = sbox_inv(state);    // SBox_inv
+    state ^= key[round];        // RoundkeyXOR with k_round
+}
+So for rr rounds of decryption:
+
+Step 0: XOR with k'rr, shift, sbox_inv, XOR with k'{rr-1}
+Step 1: mixColumns, shift, sbox_inv, XOR with k'_{rr-2}
+...
+Step rr-1: mixColumns, shift, sbox_inv, XOR with k'_0
+Total operations: rr mixColumns, rr shifts, rr sbox_invs, and rr+1 XORs with round keys.
+
+Wait, the first step doesn't have mixColumns! Let me count:
+
+For rr=1: XOR k'_1, shift, sbox_inv, XOR k'_0 (0 mixColumns)
+For rr=2: XOR k'_2, shift, sbox_inv, XOR k'_1, mixColumns, shift, sbox_inv, XOR k'_0 (1 mixColumn)
+This makes sense because in encryption, only rounds 0 to R-2 have mixColumns. The last round R-1 (which becomes R' in the spec) doesn't have mixColumns. So its inverse also doesn't have mixColumns.
+
+Now let me think about how to build this in CiVerLy. I'll need to create inverse versions of the components.
+
+For SBox_CVL, I can create SBox_CVL(SBox_inv). Let me check if SageMath SBox has an inverse method. Looking at the SKINNY code, it doesn't use SBox inverses directly. But in component.py line 2056:
+
+def __init__(self, S, name=None):
+    super().__init__(S.input_size(), S.output_size(), name=name)
+    self.__S = S
+The SageMath SBox should have an inverse() method if it's bijective. The BEANIE S-box is bijective (it's a permutation of 16 elements).
+
+Let me verify:
+
+from sage.crypto.sbox import SBox
+s = SBox([0, 4, 2, 11, 10, 12, 9, 8, 5, 15, 13, 3, 7, 1, 6, 14])
+s.inverse()
+This should work.
+
+For the shiftrows inverse: since it's its own inverse, I can use the same component. But actually it's a PermuteLayer_CVL, and it has an inv() method.
+
+For mixcolumn inverse: since the matrix is involutory, mixcolumn.inv() gives the same matrix.
+
+For RoundkeyXOR_CVL: XOR with a constant is its own inverse.
+
+So I need to build an "inverse round" block for the decryption branch.
+
+Actually, I realize that in the CiVerLy framework, the cipher is a DAG where edges go from outputs to inputs of subcomponents. We don't "invert" the graph direction; we just build a new graph that computes the inverse function.
+
+Let me define a helper function to build the decryption branch.
+
+For a standard R-round BEANIE decryption with round keys rks = [k0, k1, ..., kR]:
+
+Start with state
+XOR with kR
+ShiftRows
+SBox_inv
+XOR with k_{R-1}
+For i from R-2 down to 0:
+MixColumns
+ShiftRows
+SBox_inv
+XOR with k_i
+For rr rounds of decryption with round keys rks_r = [k'_0, k'_1, ..., k'_rr]:
+
+XOR with k'_rr
+ShiftRows
+SBox_inv
+XOR with k'_{rr-1}
+For i from rr-2 down to 0:
+MixColumns
+ShiftRows
+SBox_inv
+XOR with k'_i
+Now, how do I connect this in the main cipher graph?
+
+# U-shape cipher
+u_cipher = AESlike(4, 4, 2, name=f"BEANIE-U-{rl}-{rr}")
+
+# Left branch (rl rounds of encryption)
+# ... build rl rounds of normal BEANIE ...
+
+# Right branch (rr rounds of decryption)
+# ... build rr rounds of inverse BEANIE ...
+
+# Connect left output to right input
+Actually, let me think about whether I should use separate AESlike objects for the left and right branches, then combine them in a parent AESlike or Cipher. Looking at the current beanie implementation, it uses AESlike for everything.
+
+Let me look at how other ciphers combine sub-ciphers. The current BEANIE uses a single AESlike and adds sub-ciphers to it.
+
+Wait, AESlike is a subclass of WordSBoxCipher which is a subclass of Cipher. We can build the whole U-shape within a single AESlike(4, 4, 2) or within a generic Cipher(32, 32).
+
+Actually, looking at the current beanie.py more carefully:
+
+It uses AESlike(4, 4, 2) as the top-level cipher
+It adds beanie_round (an AESlike for a full round) and beanie_last (an AESlike for the last round) as sub-ciphers
+For the U-shape, I could similarly build:
+
+A sub-cipher for the left branch (rl rounds of encryption)
+A sub-cipher for the right branch (rr rounds of decryption)
+But wait - the left branch already is composed of beanie_round and beanie_last, and the right branch would be composed of similar blocks. Then I can wire them together in the parent cipher.
+
+Actually, for simplicity, let me just build the full U-shape in a single top-level AESlike by adding sub-ciphers sequentially.
+
+Wait, but the right branch needs SBox_inv, which is not an AESlike-like component. But SBox_CVL can be added to any WordSBoxCipher or AESlike. Let me check.
+
+Looking at aeslike.py:
+
+def add_subcipher(self, sub_cipher, edges):
+    if type(sub_cipher) is LinearLayer_CVL:
+        # check size...
+    return super().add_subcipher(sub_cipher, edges)
+And WordSBoxCipher probably allows SBox_CVL, PermuteLayer_CVL, LinearLayer_CVL, etc.
+
+Actually, looking at wordsboxcipher.py:
+
+Let me look at the wordbasedcipher and sboxcipher to understand what component types are allowed.
+
+OK, so SBoxCipher allows SBox_CVL, LinearLayer_CVL, XOR_CVL, RK_CVL, C_CVL, I_CVL, RoundkeyXOR_CVL, ConstXOR_CVL. This means I can use SBox_CVL for the inverse S-box directly.
+
+Now I need to figure out the exact structure of the U-shape in terms of CiVerLy components.
+
+For the left branch (rl rounds of encryption):
+
+Same as current implementation but with only rl rounds instead of R rounds.
+For the right branch (rr rounds of decryption): The decryption with rr rounds uses:
+
+Start: XOR with k'rr, then ShiftRows, then SBox_inv, then XOR with k'{rr-1}
+For i = rr-2 down to 0: MixColumns, ShiftRows, SBox_inv, XOR with k'_i
+Each of these operations needs to be wired correctly.
+
+But wait - I should think about whether to build the decryption branch as a nested AESlike or as direct components in the parent cipher. Building it as a nested AESlike would be cleaner but AESlike expects the SBox layer first, then permute, then mixcolumn. The decryption order is mixcolumn, permute, sbox_inv, keyadd... which doesn't match the AESlike pattern.
+
+So I'll need to build the decryption branch directly in the parent cipher (or in a generic AESlike / WordSBoxCipher).
+
+Actually, looking at the current beanie implementation, it already builds beanie_round as an AESlike containing subcomponents. For the U-shape, I can build:
+
+A left branch AESlike containing the encryption rounds
+A right branch AESlike containing the decryption rounds Wait, but the right branch doesn't follow the AESlike pattern. Let me check if AESlike enforces anything...
+Looking at AESlike.add_subcipher, it only checks that LinearLayer_CVL has the right size. It doesn't enforce order. So I can add components to an AESlike in any order!
+
+Actually wait, let me re-read:
+
+class AESlike(WordSBoxCipher):
+    def add_subcipher(self, sub_cipher, edges):
+        if type(sub_cipher) is LinearLayer_CVL:
+            # check size...
+        return super().add_subcipher(sub_cipher, edges)
+It only has a special check for LinearLayer_CVL. Otherwise, it's just a WordSBoxCipher. So I can absolutely build the inverse rounds in an AESlike!
+
+Let me plan the structure:
+
+For the left branch with rl rounds:
+
+left_branch = AESlike(4, 4, 2, name="LeftBranch")
+node = left_branch.IN
+for r in range(rl - 1):
+    # full round: KeyAdd -> SBox -> ShiftRows -> MixColumns
+    key_add = RoundkeyXOR_CVL(32, const=rks[r], name="KeyAdd")
+    node = left_branch.add_subcipher(key_add, [(node, (i, i)) for i in range(8)])
+    # SBox layer
+    node = left_branch.add_subcipher(sboxlayer, [(node, (i, i)) for i in range(8)])
+    # ShiftRows
+    node = left_branch.add_subcipher(shiftrows, [(node, (i, i)) for i in range(8)])
+    # MixColumns (applied per column)
+    for j in range(2):
+        node_mix = left_branch.add_subcipher(mixcolumn, [(node, (i + 4*j, i)) for i in range(4)])
+        # need to connect outputs...
+Hmm, this gets complicated because the current implementation builds beanie_round as a separate AESlike, then adds it to the parent cipher. Let me think if I should do the same.
+
+Actually, the current implementation reuses beanie_round and beanie_last objects for multiple rounds. This is a clever optimization because it allows setting the round key constants on the fly.
+
+For the U-shape, I think I should create a similar structure:
+
+beanie_round for full encryption rounds
+beanie_last for the last encryption round (no MixColumns)
+beanie_inv_first for the first decryption round (no MixColumns)
+beanie_inv_round for subsequent decryption rounds (with MixColumns)
+But wait, for the right branch, every "decryption block" after the first one is: MixColumns -> ShiftRows -> SBox_inv -> KeyAdd.
+
+Actually let me reconsider. The current code creates reusable sub-ciphers and then instantiates them multiple times with different constants. For the U-shape, I could create:
+
+For left branch:
+
+Reuse the existing beanie_round and beanie_last structures
+For right branch:
+
+beanie_inv_first_round: KeyAdd -> SBox_inv -> ShiftRows -> KeyAdd (wait, no, the order is KeyAdd, ShiftRows, SBox_inv, KeyAdd) Actually no, in standard decryption:
+state ^= key[R];
+state = shift(state);
+state = sbox_inv(state);
+state ^= key[R-1];
+So the operations are: RoundkeyXOR -> ShiftRows -> SBox_inv -> RoundkeyXOR
+
+And for the loop:
+
+state = mixColumns(state);
+state = shift(state);
+state = sbox_inv(state);
+state ^= key[round];
+So: MixColumns -> ShiftRows -> SBox_inv -> RoundkeyXOR
+
+For CiVerLy, I'll build an AESlike sub-cipher for each block:
+
+inv_first_block: XOR(k'rr) -> ShiftRows -> SBox_inv -> XOR(k'{rr-1}) inv_block: MixColumns -> ShiftRows -> SBox_inv -> XOR(k_i)
+
+Wait, but SBox_inv needs to be an SBox_CVL. For 8 parallel S-boxes, I need an AESlike containing 8 SBox_CVL instances.
+
+Actually, looking at the current code:
+
+sboxlayer = AESlike(4, 4, 2, name="SBoxLayer")
+for i in range(8):
+    node = sboxlayer.add_subcipher(sbox, [(sboxlayer.IN, (i, 0))])
+    sboxlayer.add_output([(node, (0, i))])
+I could create sboxlayer_inv similarly.
+
+But wait, SBox_CVL takes a SageMath SBox. The inverse S-box can be obtained with sbox.S.inverse().
+
+Let me verify the SageMath SBox interface. In the beanie.py:
+
+sbox = SBox_CVL(
+    SBox([0, 4, 2, 11, 10, 12, 9, 8, 5, 15, 13, 3, 7, 1, 6, 14]),
+    name="SBox"
+)
+And in component.py, SBox_CVL.S returns the SageMath SBox. So I can do:
+
+sbox_inv = SBox_CVL(sbox.S.inverse(), name="SBox_inv")
+Now let me plan the exact structure. I'll create helper components:
+
+sboxlayer_inv - same as sboxlayer but with inverse S-boxes
+inv_last_block - the inverse of the last encryption round: XOR -> ShiftRows -> SBox_inv -> XOR
+inv_round_block - the inverse of a full encryption round: MixColumns -> ShiftRows -> SBox_inv -> XOR
+Wait, I want to keep things simple and consistent with the current implementation. The current implementation defines beanie_round and beanie_last as AESlike sub-ciphers. For the U-shape:
+
+Left branch:
+
+For r in range(rl - 1): add beanie_round with key rks[r]
+Add beanie_last with keys rks[rl-1] and rks[rl]
+Right branch:
+
+First block (inverse of last round): inv_last with keys rks_right[rr] and rks_right[rr-1]
+For r in range(rr - 2, -1, -1): add inv_round with key rks_right[r]
+Where:
+
+inv_last = AESlike containing: RoundkeyXOR -> SBoxLayer_inv -> ShiftRows -> RoundkeyXOR
+inv_round = AESlike containing: MixColumn -> ShiftRows -> SBoxLayer_inv -> RoundkeyXOR
+Wait, but MixColumn in the current code operates on 4 nibbles (16 bits). In beanie_round, it's added per column:
+
+for j in range(2):
+    node_mix = beanie_round.add_subcipher(
+        mixcolumn, [(node_p, (i + 4*j, i)) for i in range(4)]
+    )
+    beanie_round.add_output(
+        [(node_mix, (i, i + 4*j)) for i in range(4)]
+    )
+For the inverse round, the order is MixColumn -> ShiftRows -> SBox_inv -> KeyAdd.
+
+Wait no, in decryption:
+
+state = mixColumns(state);
+state = shift(state);
+state = sbox_inv(state);
+state ^= key[round];
+So the order is: MixColumns, ShiftRows, SBox_inv, KeyAdd.
+
+But in the state representation, after MixColumns on a column, the state has 2 columns. Then ShiftRows operates on the whole state. Then SBox_inv operates on all 8 nibbles. Then KeyAdd operates on all 32 bits.
+
+So inv_round would be:
+
+inv_round = AESlike(4, 4, 2, name="BEANIE-inv-round")
+# MixColumns on each column
+node = inv_round.IN
+for j in range(2):
+    node_mix = inv_round.add_subcipher(
+        mixcolumn, [(node, (i + 4*j, i)) for i in range(4)]
+    )
+# But wait, I need to combine the outputs of both mixcolumns back into the state
+Hmm, this is tricky. In AESlike, the outputs define how the internal nodes map to the external output. For the mixcolumn in the forward round:
+
+node_p = beanie_round.add_subcipher(shiftrows, [(node_s, (i, i)) for i in range(8)])
+for j in range(2):
+    node_mix = beanie_round.add_subcipher(
+        mixcolumn, [(node_p, (i + 4*j, i)) for i in range(4)]
+    )
+    beanie_round.add_output(
+        [(node_mix, (i, i + 4*j)) for i in range(4)]
+    )
+This means the output of the first mixcolumn goes to output positions 0,1,2,3, and the second goes to 4,5,6,7.
+
+For the inverse round, starting from the input:
+
+The input has 8 nibbles in positions 0..7
+MixColumns is applied to columns: positions 0,1,2,3 form column 0, and 4,5,6,7 form column 1
+So the mixcolumn inputs are: for j=0, edges (i, i) for i=0..3; for j=1, edges (i+4, i) for i=0..3
+Wait, that's exactly the same as in the forward round! After MixColumns, the state is still 8 nibbles. Then ShiftRows is applied. Then SBox_inv. Then KeyAdd.
+
+So inv_round should be:
+
+inv_round = AESlike(4, 4, 2, name="BEANIE-inv-round")
+# MixColumns
+node = inv_round.IN
+for j in range(2):
+    node_mix = inv_round.add_subcipher(
+        mixcolumn, [(node, (i + 4*j, i)) for i in range(4)]
+    )
+# Wait, how do I combine the two mixcolumn outputs?
+Actually, looking at how beanie_round handles the mixcolumn outputs, it uses add_output to map each mixcolumn's output to specific positions. But we can't continue from there because add_output defines the cipher's external output, not an intermediate node.
+
+Wait, that's wrong. Let me re-read:
+
+node_p = beanie_round.add_subcipher(shiftrows, [(node_s, (i, i)) for i in range(8)])
+for j in range(2):
+    node_mix = beanie_round.add_subcipher(
+        mixcolumn, [(node_p, (i + 4*j, i)) for i in range(4)]
+    )
+    beanie_round.add_output(
+        [(node_mix, (i, i + 4*j)) for i in range(4)]
+    )
+So beanie_round is an AESlike sub-cipher. The outputs of beanie_round are defined by add_output. Inside beanie_round, node_p is the output of ShiftRows, and it feeds into two mixcolumns. The outputs of the two mixcolumns are mapped to beanie_round's output.
+
+When beanie_round is added to the parent cipher:
+
+node = beanie_cipher.add_subcipher(
+    beanie_round, [(node, (i, i)) for i in range(8)]
+)
+The output of beanie_round (which is the combined output of the two mixcolumns) feeds into the next stage.
+
+So for the inverse round, I need to first apply MixColumns to both columns. But how do I combine the outputs so I can continue with ShiftRows?
+
+The issue is that AESlike.add_subcipher doesn't return a combined node when multiple sub-ciphers are added. Looking at Cipher.add_subcipher (from cipher.py):
+
+Let me check how add_subcipher works for multiple outputs.
+
+Looking at the eval method, I can see that all nodes are evaluated in order, and self.edges connects outputs of earlier nodes to inputs of later nodes. The add_output method defines what becomes the cipher's external output.
+
+For intermediate operations, we can connect multiple nodes in sequence. The parent cipher's add_subcipher returns the node index. But when we add multiple sub-ciphers that operate on disjoint parts of the state (like the two mixcolumns), we get multiple node indices. We then need to combine them for the next step.
+
+Actually wait, the current beanie implementation adds the two mixcolumns to beanie_round, and then defines beanie_round's output using add_output. The result is that beanie_round outputs the combined state. Then in the parent cipher, beanie_round is used as a single node.
+
+So inside beanie_round:
+
+Input goes to key_add
+key_add output goes to sboxlayer
+sboxlayer output goes to shiftrows
+shiftrows output goes to two mixcolumn instances
+The two mixcolumn outputs together form beanie_round's output
+And because beanie_round is a Cipher itself, when it's added to the parent, it's treated as a black box.
+
+So for the inverse round, I need to build an AESlike that represents: Input -> MixColumn(column 0) + MixColumn(column 1) -> combined state -> ShiftRows -> SBox_inv -> KeyAdd -> Output
+
+But how do I represent "combined state -> ShiftRows"? Inside the AESlike, after the two mixcolumns, I need to feed their combined output into shiftrows.
+
+Actually, looking at the eval implementation: input_current_node is built from all edges targeting the current node. So for ShiftRows, I can connect both mixcolumn outputs to the shiftrows input. But wait, shiftrows takes 32 bits. The two mixcolumns each output 16 bits. I need to map them to the right positions.
+
+Actually, inside beanie_round:
+
+node_p = beanie_round.add_subcipher(
+    shiftrows, [(node_s, (i, i)) for i in range(8)]
+)
+This connects 8 4-bit words from node_s to shiftrows. For the inverse round, I need to connect the outputs of the two mixcolumns to shiftrows. Each mixcolumn outputs 4 words (16 bits). I need to map the first mixcolumn to positions 0-3 and the second to positions 4-7.
+
+So:
+
+# After mixcolumns on both columns:
+# node_mix0 outputs words 0,1,2,3 mapped to positions 0,1,2,3 of shiftrows input
+# node_mix1 outputs words 0,1,2,3 mapped to positions 4,5,6,7 of shiftrows input
+
+edges_to_shiftrows = []
+for i in range(4):
+    edges_to_shiftrows.append((node_mix0, (i, i)))
+    edges_to_shiftrows.append((node_mix1, (i, i + 4)))
+node_p = inv_round.add_subcipher(shiftrows, edges_to_shiftrows)
+Wait, but WordBasedCipher.add_subcipher expects edges in the format (a, (word_x, word_y)), and it expands them to bit-level edges. So for word positions, I'd use (node_mix0, (i, i)) and (node_mix1, (i, i+4)).
+
+Actually let me double-check: wordsize=4, so each word is 4 bits. If I say (node_mix0, (0, 0)), it expands to bit edges (0+0, 0+0), (0+1, 0+1), (0+2, 0+2), (0+3, 0+3), i.e., bits 0-3 of node_mix0 go to bits 0-3 of shiftrows.
+
+And (node_mix1, (0, 4)) expands to bits 0-3 of node_mix1 go to bits 16-19 of shiftrows. Wait no: (node_mix1, (0, 4)) means word 0 of node_mix1 goes to word 4 of shiftrows input. Since wordsize=4, bit 0 of node_mix1 goes to bit 16 of shiftrows, bit 1 to 17, etc.
+
+Yes, that's correct! The state in AESlike is 8 words: word 0 = bits 0-3, word 1 = bits 4-7, ..., word 7 = bits 28-31. So word 4 = bits 16-19, which is the first word of column 1.
+
+So the inverse round construction would be:
+
+inv_round = AESlike(4, 4, 2, name="BEANIE-inv-round")
+
+# MixColumns on both columns
+node = inv_round.IN
+node_mix0 = inv_round.add_subcipher(
+    mixcolumn, [(node, (i, i)) for i in range(4)]
+)
+node_mix1 = inv_round.add_subcipher(
+    mixcolumn, [(node, (i + 4, i)) for i in range(4)]
+)
+
+# ShiftRows on combined state
+node_p = inv_round.add_subcipher(
+    shiftrows,
+    [(node_mix0, (i, i)) for i in range(4)] +
+    [(node_mix1, (i, i + 4)) for i in range(4)]
+)
+
+# SBox layer
+node_s = inv_round.add_subcipher(
+    sboxlayer_inv, [(node_p, (i, i)) for i in range(8)]
+)
+
+# KeyAdd
+key_add = RoundkeyXOR_CVL(32, const=0, name="KeyAdd")
+node_rk = inv_round.add_subcipher(
+    key_add, [(node_s, (i, i)) for i in range(8)]
+)
+
+inv_round.add_output([(node_rk, (i, i)) for i in range(8)])
+Similarly, for the inverse "last" block (first block of decryption):
+
+inv_last = AESlike(4, 4, 2, name="BEANIE-inv-last")
+key_add_first = RoundkeyXOR_CVL(32, const=0, name="KeyAdd")
+node = inv_last.add_subcipher(
+    key_add_first, [(inv_last.IN, (i, i)) for i in range(8)]
+)
+node_p = inv_last.add_subcipher(
+    shiftrows, [(node, (i, i)) for i in range(8)]
+)
+node_s = inv_last.add_subcipher(
+    sboxlayer_inv, [(node_p, (i, i)) for i in range(8)]
+)
+key_add_second = RoundkeyXOR_CVL(32, const=0, name="KeyAdd")
+node_rk = inv_last.add_subcipher(
+    key_add_second, [(node_s, (i, i)) for i in range(8)]
+)
+inv_last.add_output([(node_rk, (i, i)) for i in range(8)])
+Wait, looking at the C decryption code again:
+
+state ^= key[R];
+state = shift(state);
+state = sbox_inv(state);
+state ^= key[R-1];
+For AESlike word indexing, XOR acts on all 8 words in parallel. So RoundkeyXOR_CVL(32, ...) XORs the full 32-bit state.
+
+But in the current beanie_last, it does:
+
+key_add_last = RoundkeyXOR_CVL(32, const=0x0, name="KeyAdd")
+node_rk_last = beanie_last.add_subcipher(
+    key_add_last, [(beanie_last.IN, (i, i)) for i in range(8)]
+)
+Does this mean key_add_last only operates on 8 words? Wait, RoundkeyXOR_CVL(32, ...) has output_length=32 and input_length=32. The edges [(beanie_last.IN, (i, i)) for i in range(8)] connect 8 words (32 bits) from beanie_last.IN to key_add_last.
+
+But key_add_last is a ConstXOR_CVL which XORs its input with a constant. So it outputs input XOR const. The edges connect all 32 bits.
+
+Then node_rk_last is the output of the key addition. This is fed into sboxlayer.
+
+So for the inverse last block:
+
+RoundkeyXOR_CVL(32, const=k_rr) takes input and outputs input XOR k_rr
+shiftrows permutes the words
+sboxlayer_inv applies inverse S-box to each word
+RoundkeyXOR_CVL(32, const=k_{rr-1}) outputs input XOR k_{rr-1}
+Yes.
+
+Now, for the U-shape assembly:
+
+u_cipher = AESlike(4, 4, 2, name=f"BEANIE-U-{rl}-{rr}")
+
+node = u_cipher.IN
+
+# Left branch: rl rounds of encryption
+for r in range(rl - 1):
+    # set key for this round
+    beanie_round.nodes[node_rk].const = rks[r]
+    node = u_cipher.add_subcipher(
+        beanie_round, [(node, (i, i)) for i in range(8)]
+    )
+
+# Last round of left branch
+beanie_last.nodes[node_rk_last].const = rks[rl - 1]
+node = u_cipher.add_subcipher(
+    beanie_last, [(node, (i, i)) for i in range(8)]
+)
+
+# Final key add of left branch (whitening key)
+# Wait, in the current implementation, after beanie_last there is an additional key add:
+key_add_final_left = RoundkeyXOR_CVL(32, const=rks[rl], name="KeyAdd")
+node = u_cipher.add_subcipher(
+    key_add_final_left, [(node, (i, i)) for i in range(8)]
+)
+
+# Right branch: rr rounds of decryption
+# First block (inverse of last round, no MixColumns)
+inv_last.nodes[...].const = rks_right[rr]
+inv_last.nodes[...].const = rks_right[rr - 1]
+node = u_cipher.add_subcipher(
+    inv_last, [(node, (i, i)) for i in range(8)]
+)
+
+# Remaining decryption rounds
+for r in range(rr - 2, -1, -1):
+    inv_round.nodes[...].const = rks_right[r]
+    node = u_cipher.add_subcipher(
+        inv_round, [(node, (i, i)) for i in range(8)]
+    )
+
+u_cipher.add_output([(node, (i, i)) for i in range(8)])
+Wait, I need to be careful about the node indices inside inv_last and inv_round. Let me define them similarly to how node_rk and node_rk_last are defined.
+
+In inv_last, I have two RoundkeyXOR_CVL instances. I need to track which is which.
+
+Let me define:
+
+key_add_first = RoundkeyXOR_CVL(32, const=0, name="KeyAdd")
+node_rk_first = inv_last.add_subcipher(
+    key_add_first, [(inv_last.IN, (i, i)) for i in range(8)]
+)
+# ...
+key_add_second = RoundkeyXOR_CVL(32, const=0, name="KeyAdd")
+node_rk_second = inv_last.add_subcipher(
+    key_add_second, [(node_s, (i, i)) for i in range(8)]
+)
+Then when using inv_last in the parent cipher:
+
+inv_last.nodes[node_rk_first].const = rks_right[rr]
+inv_last.nodes[node_rk_second].const = rks_right[rr - 1]
+node = u_cipher.add_subcipher(inv_last, [(node, (i, i)) for i in range(8)])
+For inv_round:
+
+key_add_inv = RoundkeyXOR_CVL(32, const=0, name="KeyAdd")
+node_rk_inv = inv_round.add_subcipher(
+    key_add_inv, [(node_s, (i, i)) for i in range(8)]
+)
+Then:
+
+inv_round.nodes[node_rk_inv].const = rks_right[r]
+node = u_cipher.add_subcipher(inv_round, [(node, (i, i)) for i in range(8)])
+Wait, there's a subtlety. In the current beanie_round, the first KeyAdd node's index is node_rk. When the beanie_round object is reused multiple times in the parent cipher, each copy gets its own independent instance of beanie_round. But the const is set on the template object before add_subcipher is called. When add_subcipher is called, the sub-cipher is copied (I assume), so setting const on the template before each call works.
+
+Let me verify this assumption by looking at how add_subcipher handles sub-ciphers.
+
+Line 633: self.__nodes.append(deepcopy(sub_cipher)). So yes, add_subcipher does a deepcopy of the sub_cipher. This means setting const on the template before each call works correctly.
+
+Now I have all the pieces I need. Let me write the updated beanie.py.
+
+I also need to make sure the SBox inverse works. In sage, SBox.inverse() should give the inverse permutation. Let me verify this by checking existing code or docs.
+
+Actually, looking at component.py line 2080:
+
+@classmethod
+def _from_dict(cls, d):
+    return cls(SBox(d["S"]), name=d.get("name"))
+And in SKINNY, it doesn't use SBox.inverse(). But the SageMath SBox class definitely has an inverse() method for bijective S-boxes.
+
+One more thing: in the current beanie.py, SBox_CVL is imported and used. For the inverse, I need SBox_CVL(SBox([...]).inverse()) or similar. Actually, I can create the SBox and then call .inverse() on it.
+
+Let me think about the exact interface. The user said "passing optional parameters (for the rl and rr rounds) to the constructor". So:
+
+def __init__(self, R=5, rks=None, name=None, rl=None, rr=None, rks_right=None):
+Where:
+
+R is the total number of rounds for a normal BEANIE cipher (default 5)
+rks are round keys for the left branch or for normal operation
+rl is the number of rounds for the left branch in U-shape mode
+rr is the number of rounds for the right branch in U-shape mode
+rks_right are round keys for the right branch in U-shape mode
+If rl is None and rr is None: normal mode (existing behavior) If rl is not None and rr is not None: U-shape mode
+
+For validation in U-shape mode:
+
+rl must be >= 1 and <= R
+rr must be >= 1 and <= R (or maybe 0 is allowed? Looking at Table 7, rr can be 0. And rl can be 1-6.)
+If rl and rr are provided, we use them directly, ignoring R for the branch lengths. But R might still be used for something... actually, in the user's request, they say the parameters are for rl and rr rounds.
+Wait, from Table 7:
+
+rl \ rr 0 1 2 3 4 5
+1  2  4  12  22  32  34
+2  10 12  20  26  40
+...
+So rr can be 0. What does rr=0 mean? It means no right branch, just rl rounds of encryption. And rl can range from 1 to 6.
+
+If rr=0, then the U-shape is just the left branch. If rl=0, it's just the right branch? But the table doesn't show rl=0.
+
+Looking at the text: "both branches get shortened by the same number of rounds. However, the reduced round R' is always applied in the last round."
+
+I think for simplicity, the user wants:
+
+rl: rounds of left branch (encryption)
+rr: rounds of right branch (decryption)
+If rl and rr are both None, default to normal R-round BEANIE.
+
+For round keys:
+
+Left branch needs rl + 1 round keys (k_0 to k_rl)
+Right branch needs rr + 1 round keys (k'_0 to k'_rr)
+If rks is None and we're in U-shape mode, maybe default to all zeros for left branch. If rks_right is None, default to all zeros for right branch.
+
+Actually, looking at the current constructor:
+
+if rks is None:
+    rks = [0] * (R + 1)
+I should maintain similar defaults.
+
+Wait, but what does R mean in U-shape mode? Is it the total rounds of the original cipher? The text says "a round-reduced version of the cipher, both branches get shortened by the same number of rounds." So maybe R is the full round count, and rl and rr specify how many rounds each branch uses.
+
+But the user explicitly said "passing optional parameters (for the rl and rr rounds) to the constructor". I think R should still be the reference full round count, and rl/rr specify the actual branch rounds. Or maybe R is just ignored when rl and rr are provided.
+
+I'll implement it as:
+
+If rl is None and rr is None: normal mode with R rounds.
+If rl is not None or rr is not None: U-shape mode with rl rounds left and rr rounds right.
+In U-shape mode, if rks is None: rks = [0] * (rl + 1)
+In U-shape mode, if rks_right is None: rks_right = [0] * (rr + 1)
+Wait, but what if only one of rl/rr is provided? I'll require both or neither.
+
+Let me now write the complete implementation. I need to:
+
+Keep all existing code for normal mode.
+Add code at the end of __init__ to optionally build the U-shape cipher instead.
+The U-shape cipher should be built using the same components but with inverse components for the right branch.
+Actually, I think it's cleaner to move the normal cipher building into a helper method, and then have __init__ call either the normal builder or the U-shape builder.
+
+Let me structure it as:
+
+class BEANIE_CVL:
+    def __init__(self, R=5, rks=None, name=None, rl=None, rr=None, rks_right=None):
+        if name is None:
+            name = "BEANIE"
+        if rks is None:
+            if rl is not None:
+                rks = [0] * (rl + 1)
+            else:
+                rks = [0] * (R + 1)
+        if rl is not None and rr is not None:
+            # U-shape mode
+            if len(rks) != rl + 1:
+                raise ValueError(...)
+            if rks_right is None:
+                rks_right = [0] * (rr + 1)
+            if len(rks_right) != rr + 1:
+                raise ValueError(...)
+            self.beanie_cipher = self._build_u_shape(rl, rr, rks, rks_right, name)
+        else:
+            # Normal mode
+            if len(rks) != R + 1:
+                raise ValueError(...)
+            self.beanie_cipher = self._build_normal(R, rks, name)
+
+    def _build_normal(self, R, rks, name):
+        # existing implementation
+        ...
+
+    def _build_u_shape(self, rl, rr, rks, rks_right, name):
+        # new implementation
+        ...
+But wait, the current __init__ is quite long and contains inline component building. Let me think about whether to refactor it or just append the U-shape logic.
+
+Actually, looking at the current code, it builds beanie_cipher at the end:
+
+self.beanie_cipher = beanie_cipher
+And __new__ returns self.beanie_cipher.
+
+So I could restructure __init__ to build either the normal cipher or the U-shape cipher and store it in self.beanie_cipher.
+
+Let me rewrite the file carefully.
+
+First, let me verify that SBox.inverse() works in SageMath. I'll write a quick test.
+
+... (code executions, finding sage installation)
+
+The SBox inverse matches the SBOX_INV in documentation/beanie.py: (0, 13, 2, 11, 1, 8, 14, 12, 7, 6, 4, 3, 5, 10, 15, 9). Great.
+
+Now let me write the updated beanie.py. I need to be careful about a few things:
+
+The normal mode should remain unchanged.
+For U-shape mode, I need to build rl rounds of encryption followed by rr rounds of decryption.
+The decryption components need to be the inverses.
+Let me think about the structure again.
+
+For the left branch with rl rounds:
+
+If rl == 1: Just beanie_last (KeyAdd -> SBox -> ShiftRows -> KeyAdd) with keys rks[0] and rks[1]
+If rl > 1: rl - 1 full rounds + 1 last round
+For the right branch with rr rounds:
+
+If rr == 0: No right branch
+If rr == 1: Just inv_last (KeyAdd -> ShiftRows -> SBox_inv -> KeyAdd) with keys rks_right[1] and rks_right[0] Wait, the first operation in decryption is XOR with the last round key. For rr=1, we use rks_right[1] and rks_right[0].
+If rr > 1: inv_last with keys rks_right[rr] and rks_right[rr-1], then rr - 1 inv_rounds with keys rks_right[rr-2] down to rks_right[0]
+Wait, I need to be careful about whether the user of the U-shape model thinks of rks_right[0] as the "first" round key of the right branch or as the key for the first encryption round that would be inverted.
+
+From the perspective of the right branch being E^{-1}_{K,T'} with rr rounds, the round keys used in decryption are:
+
+First step: XOR with key for round rr (the last encryption round key)
+Then: XOR with key for round rr-1
+Then in loop: XOR with keys rr-2, rr-3, ..., 0
+So rks_right should have length rr + 1, where rks_right[i] is the round key for encryption round i (for the right branch cipher). In decryption, they're used in reverse order.
+
+This matches the interface where rks for the left branch has length rl + 1, with rks[i] being the key for round i.
+
+Now, one important subtlety: in the current normal implementation, R rounds means R-1 full rounds + 1 last round, with R+1 round keys total (rks[0] through rks[R]).
+
+For the U-shape, if the left branch has rl rounds, it needs rl + 1 round keys.
+
+Let me also think about what happens if rl=0. Table 7 shows rl starting from 1, and rr can be 0. So I'll allow rr=0 but rl should probably be >= 1. Actually, looking at the table, for rl=1, rr=0, the number is 2. Let me allow rl >= 0 and rr >= 0, but rl + rr >= 1.
+
+Actually wait, if rl=0 and rr=1, that means no left branch and 1 round of decryption. That doesn't quite make sense in the context of U-shape, because there's no ciphertext to decrypt. But mathematically, it could mean just applying the inverse of 1 round to the input.
+
+Let me just support what's in the table: rl >= 1 and rr >= 0. But I'll keep it general enough.
+
+Let me now write the code. I'll restructure __init__ to handle both cases.
+
+Actually, I just realized: the current __init__ is very long because it contains extensive docstring examples. I should add docstring examples for the U-shape mode too, but first let me get the implementation right.
+
+Let me also verify: in the current beanie.py, the __new__ method is:
+
+def __new__(cls, *args, **kwargs):
+    instance = super(BEANIE_CVL, cls).__new__(cls)
+    instance.__init__(*args, **kwargs)
+    return instance.beanie_cipher
+This returns the cipher object directly, making BEANIE_CVL(R=5) effectively an AESlike instance.
+
+For the U-shape, it would return the U-shape cipher as an AESlike instance.
+
+Wait, actually there's one issue. For the inverse round, the order of operations inside an AESlike sub-cipher might not work correctly if I have two MixColumns whose outputs need to be routed to a single ShiftRows.
+
+Let me trace through how add_subcipher handles this inside an AESlike.
+
+In AESlike, add_subcipher for Components uses WordBasedCipher.add_subcipher, which expands word-level edges to bit-level edges.
+
+For the inverse round:
+
+inv_round = AESlike(4, 4, 2, name="BEANIE-inv-round")
+
+# Apply MixColumn to column 0
+node_mix0 = inv_round.add_subcipher(
+    mixcolumn, [(inv_round.IN, (i, i)) for i in range(4)]
+)
+# Apply MixColumn to column 1
+node_mix1 = inv_round.add_subcipher(
+    mixcolumn, [(inv_round.IN, (i + 4, i)) for i in range(4)]
+)
+
+# Now apply ShiftRows to combined outputs
+edges_to_shiftrows = [(node_mix0, (i, i)) for i in range(4)] + \
+                     [(node_mix1, (i, i + 4)) for i in range(4)]
+node_p = inv_round.add_subcipher(shiftrows, edges_to_shiftrows)
+But wait - Cipher.add_subcipher requires that the edges list has length equal to sub_cipher.input_length. For shiftrows, input_length = 32. The edges list has 8 entries, but each entry in WordBasedCipher.add_subcipher gets expanded to 4 bit-level edges. So 8 word-level edges -> 32 bit-level edges. That's correct.
+
+And Cipher.add_subcipher returns the index of the added node. node_p will be the index of shiftrows in inv_round.nodes.
+
+Then:
+
+node_s = inv_round.add_subcipher(
+    sboxlayer_inv, [(node_p, (i, i)) for i in range(8)]
+)
+key_add_inv = RoundkeyXOR_CVL(32, const=0, name="KeyAdd")
+node_rk = inv_round.add_subcipher(
+    key_add_inv, [(node_s, (i, i)) for i in range(8)]
+)
+inv_round.add_output([(node_rk, (i, i)) for i in range(8)])
+This should work!
+
+Wait, but sboxlayer_inv is an AESlike containing 8 SBox_CVL instances. In the current code, sboxlayer is an AESlike(4, 4, 2, ...) containing 8 S-boxes. So sboxlayer_inv would also be an AESlike(4, 4, 2, ...). When added as a sub-cipher to inv_round, it should work correctly because AESlike is a subclass of WordSBoxCipher which is allowed in SBoxCipher.
+
+Actually, let me double-check. SBoxCipher.add_subcipher allows SBoxCipher instances. AESlike is a subclass of WordSBoxCipher which is a subclass of SBoxCipher. So yes, it's allowed.
+
+One more thing: inv_round has input_length = 32 and output_length = 32. When added to the parent U-shape cipher as a sub-cipher, all 32 bits are connected. Good.
+
+Now let me write the complete updated file.
+
+Wait, before writing the file, let me re-read the current file to make sure I understand every detail, especially the docstring examples.
+
+Now I understand the structure perfectly. I need to:
+
+Modify __init__ to accept rl, rr, and rks_right.
+If rl and rr are provided, build the U-shape cipher.
+Otherwise, keep existing behavior.
+Let me also think about how to test this. I can write a Python script that uses the reference documentation/beanie.py to compute expected values and compare them with the CiVerLy implementation.
+
+For the U-shape with rl=1, rr=1:
+
+Left branch: 1 round of encryption = last round = KeyAdd(k0) -> SBox -> ShiftRows -> KeyAdd(k1)
+Right branch: 1 round of decryption = KeyAdd(k1') -> ShiftRows -> SBox_inv -> KeyAdd(k0')
+So U(P) = Dec_1(Enc_1(P)) with different keys.
+
+Let me write a test script. First let me build the implementation, then test it.
+
+Actually, I realize I should modify beanie.py to also add methods/docs/tests for the U-shape. Let me write the new file.
+
+Wait, I need to handle the case where rl or rr might be 0.
+
+rl=0, rr>0: Just decryption branch applied directly to input. But this is weird.
+rl>0, rr=0: Just encryption branch with rl rounds.
+From Table 7, rr=0 is valid. So I should support rr=0.
+
+If rr=0, there is no right branch. The output of the left branch is the cipher output.
+
+For rl=0, there is no left branch. The input goes directly into the right branch. But the table doesn't show rl=0. I'll still support it generically.
+
+One more subtlety: when rr=1, the first (and only) decryption block uses keys rks_right[1] and rks_right[0]. When rr>1, the first block uses rks_right[rr] and rks_right[rr-1], and subsequent blocks use rks_right[rr-2], ..., rks_right[0].
+
+Let me also consider: does the right branch start with the MixColumns in the same way when rr=1 vs rr>1? No:
+
+rr=1: No MixColumns in the decryption.
+rr>1: First decryption step has no MixColumns, subsequent steps do.
+This matches the encryption structure where the last round has no MixColumns.
+
+Now, looking at how documentation/beanie.py does decryption:
+
+def dec(state, round_keys, rounds):
+    if rounds == 0:
+        return state & 0xFFFFFFFF
+
+    state ^= round_keys[rounds]
+    state = _shift32(state)
+    state = _sbox32_inv(state)
+    state ^= round_keys[rounds - 1]
+
+    for round_index in range(rounds - 2, -1, -1):
+        state = _mix_columns(state)
+        state = _shift32(state)
+        state = _sbox32_inv(state)
+        state ^= round_keys[round_index]
+
+    return state & 0xFFFFFFFF
+So for rr rounds of decryption with round_keys = [k0, k1, ..., k_rr]:
+
+state ^= k_rr
+state = shift(state)
+state = sbox_inv(state)
+state ^= k_{rr-1}
+For i = rr-2 down to 0:
+state = mix_columns(state)
+state = shift(state)
+state = sbox_inv(state)
+state ^= k_i
+For the U-shape, the right branch uses rks_right as its round keys.
+
+Let me write the test script first to establish ground truth, then implement.
+
+Actually, I'll do both in parallel. Let me write the updated beanie.py and a test script.
+
+Wait, I should also add docstring examples for the U-shape in the new file. But maybe just one or two simple examples to verify correctness.
+
+Let me think about what properties the U-shape should have:
+
+If rks_right is chosen such that the right branch perfectly inverts the left branch, U(P) should equal P. But that's only if rl=rr=R and rks_right are the same as rks (for a self-inverse cipher... but BEANIE is not self-inverse).
+Actually, a simple test:
+
+rl=1, rr=1 with all zero keys.
+Compute U(P) using the CiVerLy implementation.
+Compute expected using reference code: dec(enc(P, [0, 0], 1), [0, 0], 1).
+Let me write this test.
+
+But wait, in the U-shape attack, the left and right branches use DIFFERENT tweak-key schedules, so they have different round keys. For testing, I can use the same keys or different keys.
+
+Let me create a simple test script first, without modifying beanie.py, to make sure I compute the expected values correctly.
+
+... (implementation)
+
+... (verification via testing against reference implementation)
+
+Good, the expected values are computed. Now I need to implement the U-shape in beanie.py.
+
+Expected values:
+
+rl=1, rr=1: cfe08ba5
+rl=2, rr=1: 458728b0
+rl=2, rr=2: 3f8b64ed
+Now let me write the updated beanie.py. I'll keep the existing implementation mostly intact and add the U-shape logic.
+
+Actually, I think I should restructure __init__ to factor out the component building (S-box, shiftrows, mixcolumn) since they're shared between normal and U-shape modes. But to minimize changes, let me just add the U-shape logic at the end.
+
+Wait, if rl and rr are provided, I should NOT build the normal cipher, but instead build the U-shape cipher. And for the U-shape, I need the inverse S-box layer.
+
+Let me design the updated code:
+
+def __init__(self, R=5, rks=None, name=None, rl=None, rr=None, rks_right=None):
+    if name is None:
+        name = "BEANIE"
+    
+    # Determine mode
+    u_shape_mode = (rl is not None) or (rr is not None)
+    
+    if not u_shape_mode:
+        # Normal mode (existing logic)
+        if rks is None:
+            rks = [0] * (R + 1)
+        if len(rks) != R + 1:
+            raise ValueError(...)
+        
+        # ... build normal cipher ...
+        self.beanie_cipher = beanie_cipher
+    else:
+        # U-shape mode
+        if rl is None:
+            rl = 0
+        if rr is None:
+            rr = 0
+        if rks is None:
+            rks = [0] * (rl + 1)
+        if rks_right is None:
+            rks_right = [0] * (rr + 1)
+        if len(rks) != rl + 1:
+            raise ValueError(...)
+        if len(rks_right) != rr + 1:
+            raise ValueError(...)
+        
+        # Build shared components
+        # ... same S-box, shiftrows, mixcolumn ...
+        
+        # Build encryption components (same as normal)
+        # ... beanie_round, beanie_last ...
+        
+        # Build decryption components
+        sbox_inv = SBox_CVL(sbox.S.inverse(), name="SBox_inv")
+        sboxlayer_inv = AESlike(4, 4, 2, name="SBoxLayer_inv")
+        for i in range(8):
+            node = sboxlayer_inv.add_subcipher(sbox_inv, [(sboxlayer_inv.IN, (i, 0))])
+            sboxlayer_inv.add_output([(node, (0, i))])
+        
+        # Inverse last block: KeyAdd -> ShiftRows -> SBox_inv -> KeyAdd
+        inv_last = AESlike(4, 4, 2, name="BEANIE-inv-last")
+        key_add_inv_first = RoundkeyXOR_CVL(32, const=0x0, name="KeyAdd")
+        node_rk_inv_first = inv_last.add_subcipher(
+            key_add_inv_first, [(inv_last.IN, (i, i)) for i in range(8)]
+        )
+        node_p = inv_last.add_subcipher(
+            shiftrows, [(node_rk_inv_first, (i, i)) for i in range(8)]
+        )
+        node_s = inv_last.add_subcipher(
+            sboxlayer_inv, [(node_p, (i, i)) for i in range(8)]
+        )
+        key_add_inv_second = RoundkeyXOR_CVL(32, const=0x0, name="KeyAdd")
+        node_rk_inv_second = inv_last.add_subcipher(
+            key_add_inv_second, [(node_s, (i, i)) for i in range(8)]
+        )
+        inv_last.add_output([(node_rk_inv_second, (i, i)) for i in range(8)])
+        
+        # Inverse round block: MixColumns -> ShiftRows -> SBox_inv -> KeyAdd
+        inv_round = AESlike(4, 4, 2, name="BEANIE-inv-round")
+        node = inv_round.IN
+        node_mix0 = inv_round.add_subcipher(
+            mixcolumn, [(node, (i, i)) for i in range(4)]
+        )
+        node_mix1 = inv_round.add_subcipher(
+            mixcolumn, [(node, (i + 4, i)) for i in range(4)]
+        )
+        node_p = inv_round.add_subcipher(
+            shiftrows,
+            [(node_mix0, (i, i)) for i in range(4)] +
+            [(node_mix1, (i, i + 4)) for i in range(4)]
+        )
+        node_s = inv_round.add_subcipher(
+            sboxlayer_inv, [(node_p, (i, i)) for i in range(8)]
+        )
+        key_add_inv_round = RoundkeyXOR_CVL(32, const=0x0, name="KeyAdd")
+        node_rk_inv_round = inv_round.add_subcipher(
+            key_add_inv_round, [(node_s, (i, i)) for i in range(8)]
+        )
+        inv_round.add_output([(node_rk_inv_round, (i, i)) for i in range(8)])
+        
+        # Assemble U-shape cipher
+        u_cipher = AESlike(4, 4, 2, name=f"{name}-U-{rl}-{rr}")
+        node = u_cipher.IN
+        
+        # Left branch
+        for r in range(rl - 1):
+            beanie_round.nodes[node_rk].const = rks[r]
+            node = u_cipher.add_subcipher(
+                beanie_round, [(node, (i, i)) for i in range(8)]
+            )
+        if rl > 0:
+            beanie_last.nodes[node_rk_last].const = rks[rl - 1]
+            node = u_cipher.add_subcipher(
+                beanie_last, [(node, (i, i)) for i in range(8)]
+            )
+            # Final whitening key of left branch
+            key_add_final_left = RoundkeyXOR_CVL(32, const=rks[rl], name="KeyAdd")
+            node = u_cipher.add_subcipher(
+                key_add_final_left, [(node, (i, i)) for i in range(8)]
+            )
+        
+        # Right branch
+        if rr > 0:
+            inv_last.nodes[node_rk_inv_first].const = rks_right[rr]
+            inv_last.nodes[node_rk_inv_second].const = rks_right[rr - 1]
+            node = u_cipher.add_subcipher(
+                inv_last, [(node, (i, i)) for i in range(8)]
+            )
+            for r in range(rr - 2, -1, -1):
+                inv_round.nodes[node_rk_inv_round].const = rks_right[r]
+                node = u_cipher.add_subcipher(
+                    inv_round, [(node, (i, i)) for i in range(8)]
+                )
+        
+        u_cipher.add_output([(node, (i, i)) for i in range(8)])
+        self.beanie_cipher = u_cipher
+Wait, there are some issues with the node variable names in my pseudocode. In the current code, node is reused inside sboxlayer and then again for various things. I need to use distinct variable names to avoid confusion.
+
+Actually, looking at the current code more carefully:
+
+# S-box layer (8 S-boxes in parallel)
+sboxlayer = AESlike(4, 4, 2, name="SBoxLayer")
+for i in range(8):
+    node = sboxlayer.add_subcipher(sbox, [(sboxlayer.IN, (i, 0))])
+    sboxlayer.add_output([(node, (0, i))])
+Here node is just a local variable used in the loop. After the loop, node holds the index of the last added S-box. But this doesn't matter because the outputs are properly wired.
+
+In the normal round:
+
+key_add = RoundkeyXOR_CVL(32, const=0x0, name="KeyAdd")
+beanie_round = AESlike(4, 4, 2, name="BEANIE-round")
+node_rk = beanie_round.add_subcipher(
+    key_add, [(beanie_round.IN, (i, i)) for i in range(8)]
+)
+node_s = beanie_round.add_subcipher(
+    sboxlayer, [(node_rk, (i, i)) for i in range(8)]
+)
+node_p = beanie_round.add_subcipher(
+    shiftrows, [(node_s, (i, i)) for i in range(8)]
+)
+for j in range(2):
+    node_mix = beanie_round.add_subcipher(
+        mixcolumn, [(node_p, (i + 4*j, i)) for i in range(4)]
+    )
+    beanie_round.add_output(
+        [(node_mix, (i, i + 4*j)) for i in range(4)]
+    )
+Wait, there's an issue here. node_mix is overwritten in each iteration of the loop for j in range(2). That's fine because the outputs are added immediately.
+
+For the inverse round, I need node_mix0 and node_mix1 to both be available when connecting to shiftrows.
+
+Let me write the full updated file.
+
+Actually, one more thing I need to verify: in the normal mode, is node_s inside beanie_last the same as node_s inside beanie_round?
+
+No, node_s is just a local variable. In beanie_round, node_s refers to the output of sboxlayer inside beanie_round. In beanie_last, node_s refers to the output of sboxlayer inside beanie_last. These are different local variables but have the same name. This is fine.
+
+But wait, looking at beanie_last:
+
+beanie_last = AESlike(4, 4, 2, name="BEANIE-last")
+node_rk_last = beanie_last.add_subcipher(
+    key_add_last, [(beanie_last.IN, (i, i)) for i in range(8)]
+)
+node_s = beanie_last.add_subcipher(
+    sboxlayer, [(node_rk_last, (i, i)) for i in range(8)]
+)
+Here node_s is just a local variable in __init__. When used later:
+
+beanie_last.nodes[node_rk_last].const = rks[R - 1]
+This works because node_rk_last is a local variable that stores the index.
+
+For the inverse components, I'll use similarly named local variables.
+
+Now let me write the complete file. I'll be very careful.
+
+One more consideration: in U-shape mode, if rl == 0, we skip the left branch entirely. If rr == 0, we skip the right branch entirely. But wait, if rl == 0 and rr == 0, the cipher is just the identity. I'll handle this.
+
+Also, for rl == 0 and rr > 0, the decryption branch starts directly from the input. But the decryption of 0 rounds is just the identity. For rr > 0, we need rr rounds of decryption starting from the input. This is slightly weird because the first step of decryption is XOR with the last round key. But mathematically it's well-defined.
+
+Similarly, for rl > 0 and rr == 0, it's just rl rounds of encryption.
+
+This is a general and clean design.
+
+Let me write the file now.
+
+Actually, I want to double-check one thing. In the current normal mode:
+
+for r in range(R - 1):
+    beanie_round.nodes[node_rk].const = rks[r]
+    node = beanie_cipher.add_subcipher(
+        beanie_round, [(node, (i, i)) for i in range(8)]
+    )
+
+beanie_last.nodes[node_rk_last].const = rks[R - 1]
+node = beanie_cipher.add_subcipher(
+    beanie_last, [(node, (i, i)) for i in range(8)]
+)
+
+key_add_final = RoundkeyXOR_CVL(32, const=rks[R], name="KeyAdd")
+node = beanie_cipher.add_subcipher(
+    key_add_final, [(node, (i, i)) for i in range(8)]
+)
+beanie_cipher.add_output([(node, (i, i)) for i in range(8)])
+If R == 1:
+
+range(0) is empty, so no full rounds.
+beanie_last is added with rks[0].
+Then key_add_final with rks[1].
+Output.
+So for R=1, it's: IN -> KeyAdd(k0) -> SBox -> ShiftRows -> KeyAdd(k1) -> OUT.
+
+For R=2:
+
+beanie_round with rks[0]: KeyAdd(k0) -> SBox -> ShiftRows -> MixColumns
+beanie_last with rks[1]: KeyAdd(k1) -> SBox -> ShiftRows
+KeyAdd(k2)
+Output.
+This is correct.
+
+For the left branch with rl rounds in U-shape mode:
+
+If rl == 1: just beanie_last + KeyAdd(k1)
+If rl > 1: rl - 1 times beanie_round, then beanie_last, then KeyAdd(k_rl)
+For the right branch with rr rounds:
+
+If rr == 1: inv_last with keys k'_1 and k'_0
+If rr > 1: inv_last with keys k'rr and k'{rr-1}, then rr - 1 times inv_round with keys k'_{rr-2} down to k'_0
+But wait, where do these keys come from? rks_right is a list of rr + 1 keys. The user provides them.
+
+For rr = 0: no right branch.
+
+One question: should the output of the left branch be directly connected to the input of the right branch? Yes, that's what the U-shape is.
+
+If rl == 0, the input goes directly to the first right branch operation.
+
+OK, I'm confident in the design. Let me write the file.
+
+Actually, since the file is long and I want to minimize changes, let me keep the existing code and just add the new parameters and branching logic.
+
+Wait, I also need to add docstring entries for rl, rr, and rks_right. And maybe add a test example in the docstring.
+
+Let me write the complete new file. I'll preserve all existing docstring examples and add new ones for U-shape.
+
+Let me think about what a good U-shape docstring example would be. A simple one with testable output.
+
+For rl=1, rr=1, rks=[0x01234567, 0x89abcdef], rks_right=[0xfedcba98, 0x76543210] and input 0x12345678, the expected output is 0xcfe08ba5 (from our test script).
+
+Let me verify this is correct with a slightly more complex test in the docstring too.
+
+Actually, I want to structure the docstring to explain the new parameters clearly.
+
+Let me write the file now. I'll be very careful to preserve all existing content and ensure proper indentation.
+
+... (further tests in temporary files)
+
+... (refining tests due to naming conflicts of files)
+
+The circular import is caused by naming the test script beanie.py which conflicts with the documentation/beanie.py module. SageMath's import system gets confused. Let me rename the test script or adjust the imports.
+
+Looking at the traceback: from beanie import enc, dec imports from documentation/beanie.py, but this somehow triggers a circular import because the file is also named beanie.py and might be shadowing something.
+
+Wait, the traceback says sage.rings.integer_ring has issues. This is probably because I'm in a directory where beanie.py exists and SageMath's internal import machinery gets confused. No wait, the test script is test_ushape_comprehensive.py, not beanie.py. But sys.path.insert(0, "/Users/Uni/Documents/GitHub/CiVerLy-forked-new/documentation") is in the test script, and the documentation directory contains beanie.py. But that shouldn't affect sage.rings.integer_ring.
+
+Actually, the issue might be a known SageMath circular import bug when running scripts. Let me try a different approach: run the tests directly inside sage or use sage -c.
+
+Actually, looking at the first test test_ushape.py, it DID work on the first run but then failed on CiVerLy imports... wait no, let me re-read:
+
+Expected U(P) for rl=1, rr=1: cfe08ba5
+Expected U(P) for rl=2, rr=1: 458728b0
+Expected U(P) for rl=2, rr=2: 3f8b64ed
+
+--- CiVerLy tests ---
+Error: BEANIE_CVL.__init__() got an unexpected keyword argument 'rl'
+Oh! The first test script test_ushape.py also had the same circular import issue! But it only showed errors for CiVerLy. Wait, in the first run, the reference tests ran fine but CiVerLy tests failed because the beanie.py was old. In the second run (after updating beanie.py), both reference and CiVerLy ran but with a circular import error... wait no, the second run showed:
+
+All tests passed!
+Expected U(P) for rl=1, rr=1: cfe08ba5
+...
+--- CiVerLy tests ---
+CiVerLy rl=1, rr=1: cfe08ba5
+  -> MATCH
+And the comprehensive test failed with a circular import. That suggests the first test succeeded because it imported in a different order. The comprehensive test imports civerly.util before running the reference tests, causing the circular import.
+
+Wait, looking more carefully at the comprehensive test output:
+
+All tests passed!
+Traceback (most recent call line)...
+The "All tests passed!" comes from documentation/beanie.py line 342 print("All tests passed!") because importing beanie runs its tests() function at module level! Look at line 344 of documentation/beanie.py: tests(). This is called on import!
+
+So when test_ushape_comprehensive.py does from beanie import enc, dec, it imports documentation/beanie.py which runs tests() and prints "All tests passed!". Then it tries to import civerly.util which causes the circular import.
+
+Actually, let me just skip importing from documentation/beanie.py and instead define the reference functions directly in the test script, or import them in a way that doesn't trigger the circular import.
+
+Or better yet, let me inline the reference functions in the test script.
+
+Actually, the easier fix is to just import the reference implementation carefully. But the real issue is the circular import with sage. Let me check if this happens consistently.
+
+Wait, in test_ushape.py, the import order was:
+
+from beanie import enc, dec -> imports documentation/beanie.py, runs tests()
+import civerly.cipher_implementations.beanie as beanie_cvl -> imports src/...
+And this worked in the second run! So why did test_ushape_comprehensive.py fail?
+
+In test_ushape.py:
+
+from beanie import enc, dec
+import civerly.cipher_implementations.beanie as beanie_cvl
+from civerly.util import int_to_vec, vec_to_int
+In test_ushape_comprehensive.py:
+
+from beanie import enc, dec
+from civerly.util import int_to_vec, vec_to_int
+import civerly.cipher_implementations.beanie as beanie_cvl
+The import order is different! In the comprehensive test, from civerly.util import int_to_vec, vec_to_int is imported BEFORE civerly.cipher_implementations.beanie. And civerly.util imports sage modules. Maybe there's a conflict.
+
+Actually, let me just fix the import order in the comprehensive test.
+
+Or even simpler: I can just run the existing sage doctests directly on beanie.py to verify correctness. The doctests are embedded in the docstring.
+
+Let me check if the comprehensive test passes with a simpler approach. Let me rewrite it to avoid the problematic import order.
+
+... (minor import changes)
+
+The issue is that sage --python has a circular import with sage.rings.integer_ring. This might be a SageMath version issue or something specific to running certain imports.
+
+Let me try a different approach. Instead of importing from civerly.util import int_to_vec, vec_to_int in the test script, I can import the beanie_cvl first, or use sage -c with the test inline.
+
+Wait, in the first test_ushape.py, the import order was exactly the same! But it worked:
+
+from beanie import enc, dec
+import civerly.cipher_implementations.beanie as beanie_cvl
+from civerly.util import int_to_vec, vec_to_int
+And it worked! So what's the difference?
+
+Oh! In test_ushape_comprehensive.py, I changed the import order to match test_ushape.py:
+
+from beanie import enc, dec
+from civerly.util import int_to_vec, vec_to_int
+import civerly.cipher_implementations.beanie as beanie_cvl
+Wait, that's NOT the same order. In test_ushape.py, beanie_cvl is imported BEFORE civerly.util. In test_ushape_comprehensive.py, I put civerly.util before beanie_cvl. Let me fix this.
+
+... (cleaning up)
+
+final answer:
+
+The BEANIE_CVL implementation in src/civerly/cipher_implementations/beanie.py has been updated to support the U-shape attack.
+
+Changes made
+New constructor parameters
+
+rl — number of rounds for the left (encryption) branch
+rr — number of rounds for the right (decryption) branch
+rks_right — round keys for the right branch (length rr + 1)
+When both rl and rr are provided, the cipher is assembled as
+U(P) = E^{-1}_{K,T'}(E_{K,T}(P)) instead of a normal forward cipher.
+
+Inverse components added
+
+SBox_inv using sbox.S.inverse()
+SBoxLayer_inv — 8 parallel inverse S-boxes
+BEANIE-inv-last — inverse of the last encryption round: KeyAdd → ShiftRows → SBox_inv → KeyAdd
+BEANIE-inv-round — inverse of a full round: MixColumns → ShiftRows → SBox_inv → KeyAdd
+Both MixColumns and ShiftRows are involutory in BEANIE, so the forward LinearLayer_CVL and PermuteLayer_CVL instances are reused in the decryption branch.
+
+Verification
+
+Normal-mode behavior is unchanged (all existing doctests pass).
+U-shape outputs were cross-checked against the reference implementation in documentation/beanie.py for multiple (rl, rr) combinations including edge cases (rr=0, rl=0, rl=rr=0).
+New docstring examples with verified test vectors were added for rl=1/rr=1, rl=2/rr=1, and rl=2/rr=2.
