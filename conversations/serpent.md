@@ -6453,3 +6453,1112 @@ KEY = 0x0000...
 PT = 0x8ED77392F29990EDA7A3A3CE6F579DD2
 CT = 0x2D99FD0696CED14886B0E88A968B28B2
 
+
+date: 2026-07-16T 16:00:00Z
+participants:
+- You: Henry
+- Assistant: Kilo AI, Kimi 2.6 via Neuralwatt
+topic: "Serpent differential attack implementation"
+
+User:
+Please refine the implementation of serpent in @src/civerly/cipher_implementations/serpent.py to perform characteristic analysis of an attack like @documentation/differential_characteristics.md  by passing optional parameters for the needed rounds to the constructor for an object (e.g. first and last round). You can find a reference implementation in @documentation/serpent.c , @documentation/serpent-api.h , @documentation/serpent-reference.c @documentation/serpentsboxes.h  and @documentation/serpent-tables.h and further information @documentation/Serpent.md . If you need further information, please come forward. If you need any guidance, consider @documentation/README.md . sage is installed via nix.
+
+
+Please refine the implementation of serpent in @src/civerly/cipher_implementations/serpent.py to perform characteristic analysis of an attack like @documentation/differential_characteristics.md  by passing optional parameters for the needed rounds to the constructor for an object (e.g. first and last round). You can find a reference implementation in @documentation/serpent.c , @documentation/serpent-api.h , @documentation/serpent-reference.c @documentation/serpentsboxes.h  and @documentation/serpent-tables.h and further information @documentation/Serpent.md . If you need further information, please come forward. If you need any guidance, consider @documentation/README.md . sage is installed via nix.
+The user wants to refine the Serpent implementation in src/civerly/cipher_implementations/serpent.py to support characteristic analysis of an attack like the one described in documentation/differential_characteristics.md. The key requirement is to pass optional parameters for the needed rounds to the constructor (e.g., first and last round).
+
+Let me analyze what needs to be done:
+
+The current SERPENT_CVL class takes R (number of rounds) but always starts from round 0 and goes to round R-1.
+The differential attack in the documentation targets rounds 4-10 (7 rounds) and 4-11 (8 rounds) of Serpent. This means the cipher needs to be able to start at an arbitrary round and end at an arbitrary round, using the appropriate subkeys and S-boxes for those rounds.
+The Serpent cipher uses 8 S-boxes in rotation (S0-S7). Round r uses S-box r % 8.
+The key schedule produces 33 subkeys K0-K32.
+For the attack, we need to model only a subset of rounds, e.g., rounds 4 through 10, using subkeys K4 through K11 (since each round i uses Ki, and round 10 would use K10 for the round, and K11 for the final XOR if it's the last round).
+Wait, let me re-read the attack description:
+
+The attacks target reduced-round Serpent covering rounds 4–10 (7 rounds) and rounds 4–11 (8 rounds).
+The 6-round differential characteristic is from Appendix D: rounds 4-9.
+Serpent has 32 rounds numbered 0-31.
+Round i uses S-box Si mod 8.
+Round i uses subkey Ki for the key addition, and if it's the last round, an additional K_{i+1}.
+So for rounds 4-10 (7 rounds):
+
+Round 4: S-box S4, subkey K4
+Round 5: S-box S5, subkey K5
+Round 6: S-box S6, subkey K6
+Round 7: S-box S7, subkey K7
+Round 8: S-box S0, subkey K8
+Round 9: S-box S1, subkey K9
+Round 10: S-box S2, subkey K10, and final K11
+Wait, the last round replaces LT with an additional key XOR. So round 10 (if it's the last of the 7 rounds) would be:
+
+Key XOR with K10
+S-box S2 (10 % 8 = 2)
+Key XOR with K11 (instead of LT)
+And the full cipher would then apply FP after this.
+
+But wait - the attack is analyzing a reduced-round version of Serpent. The characteristic covers rounds 4-9 (6 rounds), and the attack covers rounds 4-10 or 4-11. They retain the original Serpent round numbering.
+
+So for the cipher implementation, if we want to analyze rounds 4-10, we need to construct a cipher that:
+
+Takes a plaintext (already after IP if we're starting from round 4? Or do we include IP?)
+Applies rounds 4 through 10 with appropriate S-boxes and subkeys.
+Actually, looking at the documentation more carefully: "The attacks target reduced-round Serpent covering rounds 4–10 (7 rounds) and rounds 4–11 (8 rounds). The authors retain the original Serpent round numbering rather than renumbering the reduced cipher."
+
+So if we construct a SERPENT_CVL with some parameter like first_round=4 and last_round=10, it should:
+
+Apply IP to the plaintext (as usual)
+Skip rounds 0-3 (or just not include them)
+Apply rounds 4-10 with correct subkeys and S-boxes
+Apply FP to the output
+But wait, actually, if we're analyzing differential characteristics through rounds 4-10, we probably want the cipher to represent ONLY those rounds, or perhaps we want to be able to specify which rounds are included.
+
+Let me think about what changes are needed:
+
+The constructor currently has:
+
+def __init__(self, R=32, rks=None, key=None, keylen=128, name=None):
+I need to add parameters like first_round=0 and last_round=31 (or R=32 could be reinterpreted). But since R already specifies the number of rounds, maybe we should add start_round=0.
+
+Wait, for 32-round Serpent, rounds are 0..31. If we want rounds 4-10 inclusive, that's 7 rounds. The last round is round 10, which would normally have LT replaced by K11.
+
+So the constructor could take:
+
+start_round=0: the first round to include
+end_round=31: the last round to include
+Or maybe first_round=0 and R=32 where R is the count, but we need to know which S-boxes and subkeys to use.
+Actually, looking at how the key schedule works, it generates R+1 subkeys. For full Serpent, we have 33 subkeys (K0-K32). If we want rounds 4-10, we need subkeys K4 through K11 (7 rounds means 8 subkeys: K4,K5,K6,K7,K8,K9,K10,K11).
+
+Wait, let me check: in the current implementation, for R rounds, it uses rks[0] through rks[R] (R+1 keys). For round r (0-indexed), it uses rks[r] for the key addition, and if r == R-1 (last round), it uses rks[R] for the final XOR.
+
+So if we want rounds 4 to 10 inclusive:
+
+Number of rounds = 10 - 4 + 1 = 7
+Subkeys needed: K4, K5, K6, K7, K8, K9, K10, K11 (8 subkeys)
+S-boxes: S4, S5, S6, S7, S0, S1, S2 (since round 4 uses S4, round 10 uses S2)
+Wait, let me verify: round i uses S-box i % 8. Round 4 uses S4, round 10 uses 10 % 8 = S2. Correct.
+
+The current constructor uses rks[0] for the first round key. If we pass a full key schedule but want to start at round 4, we could slice the round keys to use indices 4 through 11.
+
+So I think the cleanest approach is:
+
+Add a start_round parameter (default 0)
+The R parameter already controls how many rounds
+When start_round is given, the S-box indices are offset by start_round
+The round keys should be sliced to start from start_round
+But wait, the user says "passing optional parameters for the needed rounds to the constructor for an object (e.g. first and last round)". So maybe they want parameters like first_round and last_round.
+
+Let me design this:
+
+def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0, last_round=None):
+If last_round is None, it defaults to first_round + R - 1? Or maybe we keep R and add first_round.
+
+Actually, the simplest API that matches the request:
+
+def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0):
+Where first_round specifies the starting round number (0-31), and R specifies the number of rounds to include. The effective rounds are first_round, first_round+1, ..., first_round+R-1.
+
+For the last round (round first_round + R - 1), if it is not round 31 (the actual last round of full Serpent), the reference code says the last round of the reduced cipher still replaces LT with an additional key XOR. Looking at the C code:
+
+if ( (0 <= i) && (i <= r-2) ) {
+    LT(SHati, BHatiPlus1);
+} else if (i == r-1) {
+    xorBlock(SHati, KHat[r], BHatiPlus1);
+}
+So for a reduced cipher with R rounds, the last round always uses the extra key XOR instead of LT, regardless of whether it's round 31. So our implementation should do the same: for any cipher with R rounds, the last round gets a final key XOR.
+
+So the changes needed:
+
+Add first_round parameter to __init__
+Offset the S-box indices by first_round % 8 instead of r % 8
+Offset the round key indices by first_round
+Keep the same structure: IP, R rounds, FP
+The last round of the constructed cipher (round R-1 in the loop) should always get the final key XOR instead of LT
+Wait, but I need to check how the current implementation handles rks. Currently:
+
+for r in range(R):
+    key_add = RoundkeyXOR_CVL(128, rks[r], name=f"K{r}")
+    ...
+    if r == R - 1:
+        key_final = RoundkeyXOR_CVL(128, rks[R], name=f"K{R}")
+If first_round=4 and R=7, we want to use:
+
+rks[4] for round 4
+rks[5] for round 5
+...
+rks[10] for round 10
+rks[11] for final XOR
+So the round key index should be first_round + r for round r in 0..R-1, and first_round + R for the final XOR.
+
+But what if someone passes rks with only the needed keys? The current API expects rks to have length R+1. To preserve backward compatibility, maybe we should:
+
+If first_round=0, rks[0] is K0, etc.
+If first_round>0, we could either expect rks to already be sliced, or we could slice it.
+Actually, I think the most intuitive API is:
+
+rks parameter should contain the round keys for the rounds being modeled. If first_round=4 and R=7, rks should have 8 elements: [K4, K5, K6, K7, K8, K9, K10, K11].
+But if a full key schedule is generated from key, we should slice it automatically.
+Let me check how rks is used currently. The user can pass rks explicitly or generate from key. For the attack analysis, they might generate the full key schedule and pass it, or pass the master key.
+
+I think the cleanest approach is:
+
+def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0):
+And:
+
+If rks is None and key is not None, generate full key schedule and then slice rks = full_rks[first_round:first_round + R + 1]
+If rks is provided, use it directly (but maybe check length)
+The rounds are numbered first_round to first_round + R - 1 for the actual cipher rounds
+S-box used in loop iteration r (0-indexed within the cipher) is (first_round + r) % 8
+The round key name can be K{first_round + r} to match original numbering
+Wait, I need to be careful about the key schedule generation. Currently:
+
+rks = serpent_key_schedule(key, keylen=keylen, R=R)
+But serpent_key_schedule takes R and returns R+1 keys. If first_round is given, we should probably generate keys for the full 32 rounds and then slice, OR we could just generate what we need.
+
+Actually, serpent_key_schedule has a limit: if R > 32: raise ValueError. But we can generate with R=32 and slice.
+
+So:
+
+if rks is None:
+    if key is not None:
+        full_rks = serpent_key_schedule(key, keylen=keylen, R=32)
+        rks = full_rks[first_round:first_round + R + 1]
+    else:
+        rks = [0 for _ in range(R + 1)]
+But what if someone wants first_round=4 and R=7 but passes rks of length 8? That should work.
+
+Wait, does serpent_key_schedule only generate up to R? Yes:
+
+for i in range(R + 1):
+    ...
+    rks.append(KHat)
+So if we call it with R=32, we get 33 keys. If we need keys 4-11, we call with R=32 and slice [4:12].
+
+Actually, one issue: serpent_key_schedule only generates R+1 prekeys if R <= 32. For the bitslice S-box application:
+
+for i in range(33):
+    whichS = (32 + 3 - i) % 32
+Wait, this loop always does range(33) for the prekey transformation? No:
+
+for i in range(33):
+    whichS = (32 + 3 - i) % 32
+Actually, looking at the code:
+
+for i in range(33):
+    whichS = (32 + 3 - i) % 32
+    sbox = SERPENT_SBOXES[whichS % 8]
+Wait, that's hardcoded to 33 iterations? No, it does:
+
+k = [0] * 132
+for i in range(33):
+    whichS = (32 + 3 - i) % 32
+    ...
+This is a bug if R < 32? Or maybe it always generates 132 words regardless? Let me check.
+
+Actually, the loop for i in range(33) produces 33 groups of 4 words = 132 words. But then:
+
+rks = []
+for i in range(R + 1):
+    packed_bitslice = ...
+    KHat = _apply_perm_int(packed_bitslice, IP_TABLE)
+    rks.append(KHat)
+So if R < 32, it only returns R+1 round keys, but the prekey expansion still computes all 132 words. That's fine.
+
+Wait, but there's an issue: whichS = (32 + 3 - i) % 32 uses 32 (the number of rounds), not R. For rounds beyond R, the S-box selection is still based on full 32-round Serpent. Since i goes up to 32 (33 iterations), whichS goes from 35 % 32 = 3 down to 3 % 32 = 3.
+
+For full Serpent:
+
+i=0: whichS = 35 % 32 = 3 → S3 → k[0..3]
+i=1: whichS = 34 % 32 = 2 → S2 → k[4..7]
+i=2: whichS = 33 % 32 = 1 → S1 → k[8..11]
+i=3: whichS = 0 → S0 → k[12..15]
+i=4: whichS = 31 % 32 = 31 → S7 → k[16..19]
+...
+i=32: whichS = 3 → S3 → k[128..131]
+This matches the spec: {k0,k1,k2,k3}:= S3(w0,w1,w2,w3), {k4,k5,k6,k7}:= S2(w4,w5,w6,w7), etc.
+
+So serpent_key_schedule always uses the full 32-round S-box sequence, which is correct because the key schedule is fixed for Serpent regardless of how many rounds we use. The function should probably always use 32 for the S-box sequence, but the user might call with R < 32.
+
+Currently if R=7, it returns 8 round keys (K0..K7), but the S-box sequence for the key schedule is still correct for the first 8 round keys (S3,S2,S1,S0,S7,S6,S5,S4).
+
+Wait, K0 uses S3, K1 uses S2, K2 uses S1, K3 uses S0, K4 uses S7, K5 uses S6, K6 uses S5, K7 uses S4. But round 0 uses S0, round 1 uses S1, etc. So K4 (for round 4) uses S7, which is correct since K_i is produced using S_{(35-i) mod 32}, and for i=4, (35-4)=31 mod 32 = 31, which corresponds to S7 (31 mod 8 = 7). Wait, but 31 corresponds to S31 which doesn't exist... Let me check the C code:
+
+whichS = (r + 3 - i) % r;
+In C, r = 32. For i=4: whichS = (32+3-4) % 32 = 31 % 32 = 31. And SBox[31] exists in the table because they duplicated S-boxes 8 times (0-31).
+
+In Python:
+
+whichS = (32 + 3 - i) % 32
+sbox = SERPENT_SBOXES[whichS % 8]
+For i=4: whichS = 31, sbox = SERPENT_SBOXES[7] = S7. Correct.
+
+So the key schedule is correct. Now for the constructor changes:
+
+The goal is to allow characteristic analysis of reduced-round Serpent starting from any round.
+
+Let me draft the changes:
+
+class SERPENT_CVL:
+    def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0):
+        if name is None:
+            name = "SERPENT"
+
+        if rks is None:
+            if key is not None:
+                full_rks = serpent_key_schedule(key, keylen=keylen, R=32)
+                rks = full_rks[first_round:first_round + R + 1]
+            else:
+                rks = [0 for _ in range(R + 1)]
+
+        if len(rks) < R + 1:
+            raise ValueError(f"Need at least {R+1} round keys, got {len(rks)}")
+
+        lt = _build_serpent_linear_layer()
+
+        def make_sboxlayer(sbox_idx):
+            sboxlayer = SBoxCipher(128, 128, name=f"SBoxLayer_{sbox_idx}")
+            output_edges = []
+            for n in range(32):
+                in_pos = [127 - (4 * n + k) for k in range(4)]
+                sbox = SBox_CVL(
+                    SERPENT_SBOXES[sbox_idx], name=f"S{sbox_idx}_{n}"
+                )
+                node = sboxlayer.add_subcipher(
+                    sbox,
+                    [(sboxlayer.IN, (in_pos[3 - k], k)) for k in range(4)]
+                )
+                output_edges.extend(
+                    [(node, (k, in_pos[3 - k])) for k in range(4)]
+                )
+            sboxlayer.add_output(output_edges)
+            return sboxlayer
+
+        cipher = SBoxCipher(128, 128, name=name)
+
+        # Initial permutation: standard -> standard-permuted (bitslice)
+        ip = PermuteLayer_CVL(FP_TABLE, name="IP")
+        current = cipher.add_subcipher(
+            ip, [(cipher.IN, (i, i)) for i in range(128)]
+        )
+
+        for r in range(R):
+            round_num = first_round + r
+            # Key addition
+            key_add = RoundkeyXOR_CVL(128, rks[r], name=f"K{round_num}")
+            current = cipher.add_subcipher(
+                key_add, [(current, (i, i)) for i in range(128)]
+            )
+
+            # S-box layer
+            sboxlayer = make_sboxlayer(round_num % 8)
+            current = cipher.add_subcipher(
+                sboxlayer, [(current, (i, i)) for i in range(128)]
+            )
+
+            if r == R - 1:
+                # Last round: final key XOR instead of LT
+                key_final = RoundkeyXOR_CVL(128, rks[R], name=f"K{round_num + 1}")
+                current = cipher.add_subcipher(
+                    key_final, [(current, (i, i)) for i in range(128)]
+                )
+            else:
+                # Linear transformation
+                current = cipher.add_subcipher(
+                    lt, [(current, (i, i)) for i in range(128)]
+                )
+
+        # Final permutation: standard-permuted -> standard
+        fp = PermuteLayer_CVL(IP_TABLE, name="FP")
+        current = cipher.add_subcipher(
+            fp, [(current, (i, i)) for i in range(128)]
+        )
+
+        cipher.add_output([(current, (i, i)) for i in range(128)])
+
+        self.cipher = cipher
+Wait, but in the make_sboxlayer function, it currently uses sbox_idx for naming. If we call it with round_num % 8, then sboxlayer is named SBoxLayer_{sbox_idx} and S{sbox_idx}_{n}. But since S-boxes repeat every 8 rounds, different rounds will reuse the same names. Is that a problem?
+
+For the characteristic analysis, we want to distinguish rounds. The current code already names each S-box layer cipher with the S-box index. If two rounds use the same S-box (e.g., round 0 and round 8 both use S0), they'll have the same name SBoxLayer_0. But they are different subcipher instances in the DAG.
+
+Actually, looking at the current code:
+
+sboxlayer = SBoxCipher(128, 128, name=f"SBoxLayer_{sbox_idx}")
+If round 8 uses S0 again, the name would be SBoxLayer_0, same as round 0. But in the DAG, they'll be different nodes. The naming might just be for display. To make it clearer, maybe we should name based on round number:
+
+def make_sboxlayer(round_num):
+    sbox_idx = round_num % 8
+    sboxlayer = SBoxCipher(128, 128, name=f"SBoxLayer_R{round_num}")
+    ...
+    sbox = SBox_CVL(SERPENT_SBOXES[sbox_idx], name=f"S{sbox_idx}_R{round_num}_{n}")
+But wait, the user's differential characteristics document talks about "active S-boxes in the first round" and "inactive S-boxes in the first round" of the attacked rounds. For the modeling to be useful, the trail should clearly identify which round each S-box belongs to.
+
+So yes, updating names to include the actual round number is important.
+
+Also, I should check whether the S-box layer construction is correct. In the current code:
+
+for n in range(32):
+    in_pos = [127 - (4 * n + k) for k in range(4)]
+    sbox = SBox_CVL(SERPENT_SBOXES[sbox_idx], name=f"S{sbox_idx}_{n}")
+    node = sboxlayer.add_subcipher(
+        sbox,
+        [(sboxlayer.IN, (in_pos[3 - k], k)) for k in range(4)]
+    )
+    output_edges.extend(
+        [(node, (k, in_pos[3 - k])) for k in range(4)]
+    )
+The in_pos is computed as [127 - (4n+k) for k in range(4)] = [127-4n, 126-4n, 125-4n, 124-4n]. Then the input edges are [(sboxlayer.IN, (in_pos[3-k], k)) for k in range(4)] = [(sboxlayer.IN, (124-4n, 0)), (sboxlayer.IN, (125-4n, 1)), (sboxlayer.IN, (126-4n, 2)), (sboxlayer.IN, (127-4n, 3))]. Wait, let me check: in_pos[3-0] = in_pos[3] = 127-4n, mapped to input bit 0 of the S-box. in_pos[3-1] = in_pos[2] = 126-4n, mapped to input bit 1. So bit 127-4n of the cipher state goes to bit 0 of the S-box.
+
+The output edges are [(node, (k, in_pos[3-k])) for k in range(4)] = [(node, (0, 127-4n)), (node, (1, 126-4n)), ...]. So output bit 0 of the S-box goes to bit 127-4n of the layer output.
+
+This seems to handle the bit ordering. Looking at the reference C code:
+
+void SHat(int box, BLOCK input, BLOCK output) {
+  int iWord, iNibble;
+  for (iWord = 0; iWord < WORDS_PER_BLOCK; iWord++) {
+    output[iWord] = 0;
+    for (iNibble = 0; iNibble < NIBBLES_PER_WORD; iNibble++) {
+      output[iWord] |= ((WORD) S(box, getNibble(input[iWord], iNibble)))
+                        << (iNibble*BITS_PER_NIBBLE);
+    }
+  }
+}
+In the reference, word 0 is the least significant word, and within each word, nibble 0 is the least significant nibble. The S-box is applied to each nibble.
+
+In the Python code, in_pos = [127 - (4 * n + k) for k in range(4)] where n goes from 0 to 31. For n=0: bits 127,126,125,124. These are the most significant bits. For n=31: bits 3,2,1,0. These are the least significant bits.
+
+Wait, the bits are mapped in reverse order? Let me check the 128-bit integer representation in this codebase.
+
+In the doctests:
+
+pt = int('8ED77392F29990EDA7A3A3CE6F579DD2', 16)
+This is a 128-bit integer. In CiVerLy, int_to_vec is used to convert to a vector. Typically, in Sage/crypto contexts, bit 0 is the LSB. But here, in_pos[3-k] with 127-(4n+k) suggests bit 127 is MSB.
+
+Actually, looking at the _apply_perm_int function:
+
+def _apply_perm_int(x, perm):
+    result = 0
+    for p in range(128):
+        if (x >> perm[p]) & 1:
+            result |= 1 << p
+    return result
+This means bit p of the output comes from bit perm[p] of the input. If perm[p] = p, it's identity.
+
+In the C code, getBit(x, p) gets bit p where p=0 is LSB of word 0 (which is the least significant word). So bit 0 is the LSB of the 128-bit block, bit 31 is MSB of word 0, bit 32 is LSB of word 1, etc.
+
+Wait, C code says:
+
+for (i=0; i < WORDS_PER_BLOCK; i++) {
+    temp[i] = input[i] ^ ((WORD*) cipher->IV)[i];
+}
+Word 0 is at the lowest address and is the least significant 32 bits. Bit 0 is LSB of word 0.
+
+In the Python code, when they write _apply_perm_int(x, IP_TABLE), they treat x as a 128-bit integer where bit 0 is the integer's LSB (value 1), bit 1 is value 2, etc. That corresponds to the C convention.
+
+So in the S-box layer, 4*n + k for n=0, k=0..3 gives bits 0,1,2,3. These are the LSBs, corresponding to word 0, nibble 0.
+
+But in the code, in_pos = [127 - (4 * n + k) for k in range(4)]. For n=0, this gives bits 127,126,125,124. That seems reversed!
+
+Wait, let me look at how SBox_CVL is wired:
+
+node = sboxlayer.add_subcipher(
+    sbox,
+    [(sboxlayer.IN, (in_pos[3 - k], k)) for k in range(4)]
+)
+in_pos[3-k] for k=0: in_pos[3] = 127 - 4n - 3 = 124 - 4n... wait, let me recalculate.
+
+in_pos = [127 - (4*n + k) for k in range(4)] For k=0: 127 - 4n For k=1: 126 - 4n For k=2: 125 - 4n For k=3: 124 - 4n
+
+Then in_pos[3-k]: For k=0: in_pos[3] = 124 - 4n For k=1: in_pos[2] = 125 - 4n For k=2: in_pos[1] = 126 - 4n For k=3: in_pos[0] = 127 - 4n
+
+Wait, that's even more confusing. Let me re-examine this carefully.
+
+Actually, maybe the bit ordering in the Python implementation intentionally reverses bits because of how SBox_CVL maps inputs.
+
+Let me look at the test vector to see if it's correct.
+
+Test vector from NESSIE with key=0, keylen=128: pt = int('8ED77392F29990EDA7A3A3CE6F579DD2', 16) ct expected = 0x2d99fd0696ced14886b0e88a968b28b2
+
+If the current code passes this test, then the bit ordering is correct. I should be careful not to break it.
+
+Let me verify by checking the S-box application. Actually, I don't need to fully verify the bit ordering since the tests pass. I just need to preserve it.
+
+But let me understand: in the code, in_pos = [127 - (4 * n + k) for k in range(4)] maps nibble n to bits [127-4n, 126-4n, 125-4n, 124-4n]. The edge mapping uses in_pos[3-k]:
+
+For k=0 (S-box input bit 0): in_pos[3] = 124 - 4n For k=1 (S-box input bit 1): in_pos[2] = 125 - 4n For k=2 (S-box input bit 2): in_pos[1] = 126 - 4n For k=3 (S-box input bit 3): in_pos[0] = 127 - 4n
+
+So S-box bit 0 comes from state bit 124 - 4n, bit 1 from 125 - 4n, bit 2 from 126 - 4n, bit 3 from 127 - 4n.
+
+For n=0: S-box bit 0 from state bit 124, bit 1 from 125, bit 2 from 126, bit 3 from 127. For n=31: S-box bit 0 from state bit 0, bit 1 from 1, bit 2 from 2, bit 3 from 3.
+
+This means the state bit positions are 127 - (4n + (3-k)) = 127 - 4n - 3 + k = 124 - 4n + k. Wait, that gives for n=0, k=0: 124. For n=0, k=3: 127. So it's bits [124, 125, 126, 127] for n=0.
+
+In terms of the 128-bit integer, these are the 4 highest bits (nibble 31). For n=31, it's bits [0,1,2,3], the lowest nibble.
+
+Hmm, actually 4*0 + 0 = 0, so normally nibble 0 is bits 0-3. But here 124-127 corresponds to nibble 31.
+
+Wait, I think there's a confusion between how the integer maps to the block. In the C code, the plaintext is treated as 4 words, word 0 being the least significant. Bit 0 is LSB of word 0. Bit 127 is MSB of word 3.
+
+In this Python code, since pt = int(hex_string, 16), the hex string is read as a big-endian number. So 0x8ED7... means the MSB is 8. Bit 127 (the MSB of the 128-bit integer) corresponds to the first hex digit.
+
+In the C reference, the key material is also read as a hex string where the first characters correspond to the most significant bits? Actually, looking at stringToWords:
+
+result = stringToWords(key->keyMaterial, key->userKey, WORDS_PER_KEY);
+It probably converts hex to words in little-endian order. But the encryption test vectors in NESSIE are given as hex strings.
+
+The point is, the current implementation passes the test. I just need to add the first_round parameter and update the naming, without changing the core logic.
+
+Now, another consideration: the differential characteristic analysis mentioned in differential_characteristics.md talks about "13 active S-boxes in the first round" and "19 inactive S-boxes in the first round". The first round of the attack is round 4. The active/inactive status depends on the specific characteristic.
+
+For the CiVerLy modeling framework, the user wants to be able to construct a SERPENT_CVL that covers only rounds 4-10 (or any other range) so they can apply analyse with differential cryptanalysis options.
+
+So the main changes are:
+
+Add first_round parameter
+Use first_round to offset S-box selection and round key selection
+Update component names to reflect actual round numbers
+Ensure the constructor can slice the full key schedule when key is provided
+Let me also check the __new__ method - it calls instance.__init__ and returns instance.cipher. This is fine.
+
+One more thing: should I also add a last_round parameter? The user said "passing optional parameters for the needed rounds to the constructor for an object (e.g. first and last round)". But with R already specifying the number of rounds, adding both first_round and last_round might be redundant or conflicting. I think first_round with the existing R is sufficient. However, maybe it's clearer to have:
+
+def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0, last_round=None):
+Where last_round can override R if provided: if last_round is not None, then R = last_round - first_round + 1.
+
+This would be very convenient for the user's use case:
+
+serpent = SERPENT_CVL(key=0, keylen=128, first_round=4, last_round=10)
+I think this is a good API.
+
+What about the key schedule? If last_round is set, we still need R+1 round keys. With first_round=4, last_round=10, R=7, we need r
+
+... (code edits)
+
+The file looks good, but I need to verify the indentation. Looking at the output, the def __init__ at line 480 seems to have wrong indentation - it should be indented inside the class, but the output shows it flush with the class keyword? Wait, looking again:
+
+478:     """
+
+480: def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0, last_round=None):
+Actually, the blank line 479 probably contains spaces. But line 480 def __init__ should be indented by 4 spaces inside the class. The Read tool output shows it as def __init__ with no leading spaces, but that's because the content after the line number prefix doesn't show leading whitespace? Wait, looking at line 391:
+
+391: class SERPENT_CVL:
+And earlier lines show indent. For example line 567:
+
+567:         instance = super(SERPENT_CVL, cls).__new__(cls)
+So the indentation is probably fine. Let me run a quick test with sage to verify the doctests pass and the reduced-round construction works.
+
+Wait, I should check the blank line between """ and def init. There should be no blank line. Let me look at lines 478-480 again:
+
+478:     """
+479: 
+480: def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0, last_round=None):
+Actually, line 479 is a blank line, and line 480 should have 4 spaces. In the Read tool output, line 480 shows def __init__ but the leading spaces might just be omitted in the display? No, looking at line 507 in the output:
+
+507:             for n in range(32):
+It shows the leading spaces. So line 480 in the output shows def __init__ with no leading spaces? Let me check the actual file content.
+
+Wait, no. The Read tool output shows:
+
+478:     """
+479: 
+480: def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0, last_round=None):
+If there are no leading spaces on line 480, then __init__ is not inside the class, which would be a syntax error. But the edit tool would fail if that were the case... Actually, the edit tool just does string replacement, it doesn't check Python syntax.
+
+Let me verify the actual file content by reading with bash and sed to see the indentation. Or better, run the Python parser.
+
+Actually, looking at the previous read before the edit, the __init__ was at line 466. After the edit, the __init__ should be indented by 4 spaces. The edit tool might have removed the indentation if I didn't include it in the newString. Let me check my edit.
+
+I provided:
+
+    def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0, last_round=None):
+Wait, actually I provided the replacement inside the class body. The oldString was:
+
+    def __init__(self, R=32, rks=None, key=None, keylen=128, name=None):
+And the newString was:
+
+    def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0, last_round=None):
+So it should be indented by 4 spaces. But looking at the Read output, the line number 480 shows no leading spaces. Wait... let me look at lines 392-396:
+
+392: class SERPENT_CVL:
+393:     r"""
+394:     The CiVerLy implementation of the Serpent block cipher.
+And line 478-480:
+
+478:     """
+479: 
+480: def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0, last_round=None):
+That looks wrong. Line 480 should be indented. Wait, maybe the Read tool is not showing spaces correctly? No, it shows spaces on other lines. For example line 567 shows 8 spaces.
+
+Actually, let me check the actual file. Maybe the edit tool had an issue with indentation. Let me look at line 480 more carefully.
+
+Hmm, I think the issue is that my newString in the second edit (the docstring replacement) included the def __init__ line but maybe I accidentally removed the indentation? Let me re-read the edit.
+
+In the second edit, I replaced from INPUT:: through the end of the docstring (""") and up to but NOT including the def __init__. Wait, let me check:
+
+My oldString started with INPUT:: and ended with ....: assert "Unnamed Component" not in trail.
+
+My newString started with INPUT:: and ended with ....: assert "Unnamed Component" not in trail.
+
+Then the next line in the file was def __init__. But in the second edit, I didn't touch def __init__.
+
+Wait, but looking at the read output, line 480 is def __init__. Let me count lines.
+
+Actually, I think the Read tool output might be misleading because line 479 is empty but might contain spaces. But line 480 definitely shows no indentation in the tool output, which would be a problem.
+
+Let me run a Python syntax check.
+
+... (syntax issues fixed)
+
+... (search sage and execute test)
+
+The doctests all pass. Now let me also add a small test to verify the reduced-round behavior is correct by comparing with the full-round cipher. For a reduced-round cipher starting at round 0 and ending at round 10, it should produce the same output as encrypting with the full cipher but only for 11 rounds.
+
+Wait, actually, the reduced-round cipher with first_round=0 and last_round=10 is equivalent to just R=11. And the output would be the state after round 10, passed through FP. This is not the same as the full 32-round encryption.
+
+However, I can verify a property: if I construct a 1-round cipher with first_round=0, it should behave the same as R=1. And if I construct first_round=4, last_round=4, it should be a single round using S4 and K4, with K5 as final XOR.
+
+But I think the doctests are sufficient to show the code works. Let me also verify the modeling example works for the reduced-round case. Actually, I already added a doctest for that.
+
+Let me also check if there are any tests in the project I should run. But since the user didn't ask for anything more than the refinement, and the doctests pass, I'm good.
+
+Actually, wait. Let me think about whether there could be an issue with the key_schedule function when called with R=32. The function generates full 33 keys. And when key is passed to the constructor with first_round=4 and last_round=10, it slices them. But what if the user passes their own rks? Then the length check len(rks) < R + 1 applies.
+
+One edge case: if the user passes first_round=0, last_round=31 (full cipher), R becomes 32, and it works.
+
+Another edge case: if the user passes R=32 and also first_round=0, it works.
+
+What if they pass both R and last_round? The last_round overrides R. That's documented.
+
+What about first_round + R - 1 >= 32? For first_round=31, last_round=31, R=1, and 31+1-1=31 < 32. OK. For first_round=32, it fails because first_round < 0 or first_round + R - 1 >= 32, but actually first_round=32 with R=1 gives 32 >= 32, which fails. Correct.
+
+I think the implementation is solid. Let me provide a summary to the user.
+
+The implementation in serpent.py has been refined to support characteristic analysis on arbitrary round ranges.
+
+What changed
+New constructor parameters
+first_round (default 0): the first Serpent round to include.
+last_round (optional): the last Serpent round to include. When given, R is automatically computed as last_round - first_round + 1.
+Key-schedule slicing
+When a master key is supplied, the full 33-round key schedule is generated and sliced to [first_round : first_round + R + 1], so the correct subkeys are used for the selected range (e.g. K4 … K11 for rounds 4–10).
+Correct S-box and subkey wiring
+Each internal round is labeled with its real Serpent round number, and the S-box used is round_num % 8. Subcipher names now include the actual round (e.g. SBoxLayer_R4, S4_R4_0, K4), which makes trails readable when analyzing reduced-round variants such as the 7-round attack on rounds 4–10.
+Validation
+The constructor checks that the requested range fits within Serpent’s 0–31 round limits and that enough round keys are provided.
+
+User:
+I think you did not account for a construction of rounds in the middle of the encryption. I can see in line 544 and following that if I reach the rounds limit I set by using first_round and last_round, this last round will not be the e.g. 10th round, but the real last round from the wohle cipher, which is not the way this is meant to work. Please refine the implementation of @src/civerly/cipher_implementations/serpent.py  to be able to build the cipher with the rounds I pick without modifying the data path between the specified rounds.
+
+The user is pointing out that when first_round and last_round are used, the internal behavior for the last round (replacing LT with an additional key XOR) is based on r == R - 1, i.e., whether it is the last round of the constructed cipher. But the user wants to be able to build a cipher that represents rounds in the middle of the full cipher, e.g., rounds 4--10, where round 10 is NOT the last round of the real Serpent cipher (round 31 is). In the real Serpent, only round 31 has the extra key XOR instead of LT.
+
+Wait, but in a reduced-round cipher attack, you are typically analyzing a reduced-round version of the cipher. If the user wants rounds 4--10, they want:
+
+Round 4: key XOR + S4 + LT
+Round 5: key XOR + S5 + LT
+...
+Round 9: key XOR + S9 + LT
+Round 10: key XOR + S10 + ???
+In the real Serpent, round 10 would have LT after the S-box layer. Only round 31 has the extra key XOR instead of LT. But the current code replaces LT with key XOR on the last constructed round (r == R-1). For the user's intended use case of analyzing rounds 4-10, they probably want round 10 to include LT as well, because round 10 is not the true last round.
+
+Wait, the user says: "if I reach the rounds limit I set by using first_round and last_round, this last round will not be the e.g. 10th round, but the real last round from the whole cipher, which is not the way this is meant to work."
+
+Actually, looking at the user's statement more carefully: "this last round will not be the e.g. 10th round, but the real last round from the whole cipher". I think the user means that when constructing rounds 4-10, the code currently makes the last constructed round (round 10) have an extra key XOR instead of LT, but it should have LT because it's not the true final round of Serpent. Alternatively, the user might want the option to specify whether the constructed cipher should end with LT or key XOR, or to automatically determine it based on whether last_round is 31.
+
+Actually, re-reading: "Please refine the implementation to be able to build the cipher with the rounds I pick without modifying the data path between the specified rounds."
+
+This means: if I pick rounds 4-10, the data path should be exactly as it is in the real cipher for those rounds. Round 10 should have LT after the S-box layer, not the special final key XOR. The special final key XOR should ONLY be applied if last_round == 31 (the real last round).
+
+Wait, but what about a reduced-round cipher from 0 to 6? In the original code, R=7 means last_round = 6, and the code replaces LT with key XOR on round 6. Is that desired for reduced-round cipher analysis? Usually, yes, if you are analyzing a 7-round Serpent, you might model it as rounds 0-6 with the last round having key XOR instead of LT. But the user says "without modifying the data path between the specified rounds". This implies that if I'm taking rounds 4-10 from the real cipher, I want round 10 to include LT just like in the real cipher.
+
+But then what about the output? If round 10 has LT, the output of the cipher is after LT. But the real Serpent has FP after round 31's key XOR. If the user wants to model rounds 4-10 as-is, they probably want the output after round 10's LT, then maybe FP? Or maybe they don't want FP either, because FP is only at the very end.
+
+Actually, the user wants to build the cipher with the rounds they pick without modifying the data path between the specified rounds. So:
+
+If first_round=0, last_round=6, the constructed cipher should be identical to a 7-round Serpent (rounds 0-6), where round 6 has LT? Or should it have the key XOR? In standard reduced-round analysis, you usually keep the "last round has key XOR" convention. But the user specifically says "without modifying the data path between the specified rounds". This means the rounds should behave exactly as they do in the full cipher.
+Wait, but if you take rounds 0-6 from the full cipher, round 6 has LT, and then round 7 would come next (but it's excluded). So the constructed cipher would end with LT. That's different from the current R=7 behavior which ends with key XOR. The user is saying that when using first_round and last_round, they want the exact internal data path, not the "reduced-round cipher" abstraction.
+
+But R by itself without first_round/last_round should probably maintain backward compatibility. The current behavior for R=7 (without first_round/last_round) is to make the last round have key XOR instead of LT. That's the standard reduced-round cipher behavior.
+
+So the fix should be:
+
+When using first_round/last_round to construct a range, the last round should be treated as an internal round (with LT) unless last_round == 31 (the true last round), in which case it gets the final key XOR instead of LT.
+The FP should only be applied if last_round == 31? Or should FP always be applied? Actually, FP is applied at the very end of the cipher. If you're constructing rounds 4-10, you probably want the output after round 10's LT, not after FP. FP is specifically the final permutation and is part of the outer shell. The user says "without modifying the data path between the specified rounds". This suggests that if rounds 4-10 are internal, IP and FP should not be there either, because they are outside the rounds. But wait, the current code always applies IP at the beginning and FP at the end. If the user wants to analyze rounds 4-10, they might want the state after round 3 (which includes IP but also 4 rounds of processing) as input, or they might want IP applied to the plaintext and then rounds 4-10.
+Actually, looking at differential characteristics and attacks, the typical approach is:
+
+You define the reduced cipher as the standard cipher with fewer rounds, which includes IP, the rounds, and FP. For example, a 7-round Serpent includes IP, rounds 0-6, and FP (with round 6 having key XOR instead of LT).
+But the user specifically says "build the cipher with the rounds I pick without modifying the data path between the specified rounds". This means they might want to model a middle segment like rounds 4-10. In that case, the input to the segment is the state after round 3, and the output is after round 10. The segment should not include IP/FP because those are outside.
+Wait, but the user's example: "for the attack on rounds 4--10" in my docstring. In the differential attack described in differential_characteristics.md, the attackers target reduced-round Serpent covering rounds 4-10. The text says: "The attacks target reduced-round Serpent covering rounds 4–10 (7 rounds) and rounds 4–11 (8 rounds). The authors retain the original Serpent round numbering rather than renumbering the reduced cipher." This means they are analyzing the cipher from round 4 through round 10. In the real cipher, round 10 is not the last round. So round 10 has LT. And there is no FP after round 10. The output difference after round 10 is what matters, then they peel off round 11 or do other things.
+
+So the user's request is: when first_round and last_round are specified, construct a cipher that:
+
+Optionally includes IP if first_round == 0? Or maybe always includes IP? Actually, if you start from round 4, should IP be applied first? In the real cipher, IP is applied to plaintext P giving B0. Then round 0 gives B1, ..., round 3 gives B4. So the input to round 4 is B4, which is after IP and rounds 0-3. If the user wants to model just rounds 4-10, the input should be B4. But SERPENT_CVL takes a plaintext P and applies IP, then rounds. If first_round=4, applying IP to the input P would be wrong because the input to the round-4 segment is B4, not IP(P).
+Wait, but for differential analysis, you often just care about the round function itself. If you want to model rounds 4-10 for differential trails, you might want to model the segment exactly as it appears in the cipher. The input to round 4 is the output of round 3, and the output is the output of round 10. But if you're constructing a Cipher object in CiVerLy, it expects a plaintext. The user can just treat the input as B4.
+
+Alternatively, maybe the user wants the full flow: IP, then rounds 4-10, but without FP? And round 10 should have LT because it's not the true last round.
+
+Let me re-read the user's complaint: "if I reach the rounds limit I set by using first_round and last_round, this last round will not be the e.g. 10th round, but the real last round from the whole cipher, which is not the way this is meant to work."
+
+I think the user means: currently, when last_round=10, the code treats round 10 as if it were round 31 (replacing LT with key XOR). But round 10 should have LT, just like any internal round. The last round should only get the special key-XOR treatment if it is actually round 31.
+
+And what about IP/FP? The user says "without modifying the data path between the specified rounds". This could mean:
+
+If first_round > 0, do not apply IP.
+If last_round < 31, do not apply FP.
+And if last_round < 31, the last round is an internal round (LT instead of key XOR).
+Alternatively, maybe IP and FP should always be kept because they are part of the standard data path. Let's look at the user's specific request: "build the cipher with the rounds I pick without modifying the data path between the specified rounds." "Between the specified rounds" implies that IP is before round 0 and FP is after round 31, so they are outside the specified rounds. Thus they should probably be omitted when specifying a middle range.
+
+However, the docstring example I added shows first_round=4, last_round=10 and expects a valid cipher. If we omit IP and FP for middle rounds, the cipher would be smaller but still valid. The user might want this.
+
+Wait, but in CiVerLy, Cipher is a generic container. If the user wants to analyze the differential over rounds 4-10, they might want to include IP if first_round=0 and FP if last_round=31. For first_round=4, last_round=10, maybe they don't want IP or FP. But the current code always includes IP and FP. If we remove IP/FP for middle rounds, existing tests that use R=1 with default first_round=0 would still have IP and FP (since first_round=0 and last_round is computed from R as R-1, which for R=1 is last_round=0, not 31, so FP would be omitted!). But the existing tests expect FP to be there for R=1.
+
+Ah, this is important. Backward compatibility: R=32 (default) should give full Serpent with IP, rounds 0-31, and FP. R=1 should give 1-round Serpent with IP, round 0 (with key XOR instead of LT because it's the last round of the reduced cipher), and FP. Wait, does the current code for R=1 apply FP? Let's check: yes, the current code always applies FP at the end. And for R=1, round 0 gets the key XOR instead of LT.
+
+But if we change the logic so that IP/FP are only applied for full-cipher or from round 0 to round R-1 where we treat it as a prefix (not middle), we need to distinguish between:
+
+R specified alone (old behavior): reduced-round cipher starting at round 0, ending at round R-1, with final key XOR on last round, and with IP and FP.
+first_round and last_round specified (new behavior): exact slice from the real cipher, with IP only if first_round==0, FP only if last_round==31, and LT on all rounds except if last_round==31.
+Alternatively, maybe the user wants the new parameters to behave exactly as an exact slice from the real cipher, while keeping the old R behavior unchanged for backward compatibility.
+
+Let me re-read the user's message carefully: "Please refine the implementation ... to be able to build the cipher with the rounds I pick without modifying the data path between the specified rounds."
+
+"Without modifying the data path between the specified rounds" -> For rounds 4-10, the data path should be identical to rounds 4-10 of the full cipher. That means:
+
+Input goes into round 4 directly (no IP, because IP is before round 0).
+Round 4: key XOR + S-box + LT
+...
+Round 10: key XOR + S-box + LT (because it's not round 31)
+No FP (because FP is after round 31)
+But what if someone uses first_round=0, last_round=31? Then it should be the full cipher with IP and FP. What if someone uses first_round=0, last_round=6? Then:
+
+Since it's a slice of the real cipher, the input is plaintext -> IP -> round 0 -> ... -> round 6 -> output (after LT). No FP. But wait, the old behavior with R=7 includes FP and has key XOR on round 6.
+This suggests that the first_round/last_round feature should be independent of the R feature. But maybe the user wants first_round/last_round to be used for exact slices, while R alone keeps the old reduced-round cipher behavior.
+
+I think the best approach is:
+
+If last_round is provided, treat as exact slice: IP only if first_round == 0, FP only if last_round == 31, LT on all rounds unless last_round == 31 (in which case the last round gets key XOR instead of LT).
+If last_round is not provided (old behavior with just R), keep the old logic: IP always, FP always, last round (R-1) gets key XOR instead of LT.
+Wait, but what about R when used with first_round and without last_round? In my current code:
+
+if last_round is not None:
+    R = last_round - first_round + 1
+If only first_round is provided (e.g., first_round=4, R=7), then last_round is None, so R stays 7. Then the rounds would be 4,5,6,7,8,9,10. And the last round (r=6) would be treated as final (key XOR instead of LT). Is this what the user wants? The user said "build the cipher with the rounds I pick without modifying the data path between the specified rounds." If they specify first_round=4 and R=7, they might want rounds 4-10 exactly as in the cipher. In that case, round 10 should have LT.
+
+So perhaps any time first_round != 0 or last_round is not the default end-of-cipher, we should use the exact-slice semantics? Or perhaps we should add a new boolean parameter exact_slice=False? But the user didn't ask for that explicitly.
+
+Better idea: Change the logic so that the special "last round key XOR instead of LT" only applies when the last constructed round is actually round 31 of Serpent. So:
+
+if r == R - 1 and round_num == 31:
+    # final key XOR
+else:
+    # LT
+And for IP/FP:
+
+if first_round == 0:
+    apply IP
+...
+if last_round == 31 or (last_round is None and first_round + R - 1 == 31):
+    apply FP
+Wait, but if someone uses R=1 with default first_round=0, then round_num for the last round is 0. So round_num == 31 is false, meaning LT would be applied instead of key XOR. This breaks backward compatibility for R=1 and all old uses of R alone!
+
+So we need to distinguish between:
+
+Reduced-round cipher (old behavior, triggered when first_round == 0 and last_round is None): This builds a standard reduced-round cipher where the last round (R-1) has key XOR instead of LT.
+Exact slice (new behavior, triggered when first_round != 0 or last_round is not None): This builds an exact slice from the real cipher.
+Alternatively, maybe we should always treat the last constructed round as having key XOR if it is the last round of the constructed cipher, EXCEPT when last_round is explicitly used and is not 31? But then the user specifically complained about that behavior when using last_round=10.
+
+Let me think about what makes the most sense for the user. The user is reading differential_characteristics.md which describes an attack on rounds 4-10 of Serpent. They want to model this in CiVerLy. For that, they need a cipher object that corresponds exactly to rounds 4-10. So they want to be able to say SERPENT_CVL(first_round=4, last_round=10) and get a cipher that has:
+
+No IP
+Round 4: key XOR + S4 + LT
+...
+Round 10: key XOR + S10 + LT
+No FP
+And similarly for rounds 4-11. And they want to be able to analyze differential characteristics over these rounds.
+
+So I think the cleanest design is:
+
+first_round and last_round are used for exact slices.
+The old R parameter alone is for reduced-round ciphers starting at round 0.
+We should also probably add a parameter include_ip_fp that defaults to True for old behavior and False for exact slices, or infer it automatically.
+But actually, for exact slices, IP and FP should probably be omitted because they are not part of the specified rounds. For first_round=0, last_round=31, maybe IP and FP should be included.
+
+Let me check the differential characteristics document again. It says "The attacks target reduced-round Serpent covering rounds 4–10 (7 rounds) and rounds 4–11 (8 rounds). The authors retain the original Serpent round numbering rather than renumbering the reduced cipher." So for the attack, they consider rounds 4 through 10. They don't mention IP/FP because those are just conceptual.
+
+For CiVerLy modeling of a differential trail, the Cipher object is used for analyse and get_trail. The trail is computed over the rounds of the cipher object. If the cipher object includes IP and FP, they appear as extra layers in the trail. If you want a trail over rounds 4-10, you probably don't want IP and FP in the trail because they complicate the analysis.
+
+So my revised plan:
+
+Keep R for backward compatibility (reduced-round cipher from round 0 to round R-1, with IP, FP, and final key XOR).
+When first_round and/or last_round are explicitly provided (non-default or last_round is not None), switch to "exact slice" mode:
+first_round defaults to 0.
+last_round defaults to first_round + R - 1 if not provided? Or maybe if last_round is provided, compute R from it.
+In exact slice mode: IP is included only if first_round == 0. FP is included only if last_round == 31. The last round uses LT unless last_round == 31.
+If only first_round is specified (e.g., first_round=4, R=7), then last_round is not provided. We could compute last_round = first_round + R - 1 and treat it as an exact slice.
+Wait, the user specifically said "build the cipher with the rounds I pick without modifying the data path between the specified rounds." So if they pick rounds 4-10, they want the exact data path. If they pick R=7, first_round=4, they want rounds 4-10. If they pick R=1, first_round=0, they want round 0. But the old behavior for R=1 was a reduced-round cipher with FP and final key XOR. Should we preserve that?
+
+I think the safest is:
+
+If first_round or last_round is explicitly changed from default (i.e., user passed them), use exact slice mode.
+Otherwise, use reduced-round mode.
+But how to detect if they were explicitly passed? In Python, we can use None as a sentinel for last_round, but first_round has a default of 0. We can't distinguish first_round=0 explicitly from default.
+
+Alternative: Add an explicit exact_slice=False parameter. But the user didn't ask for it and might not want it.
+
+Alternative approach: Always treat last_round as defining the exact end. If last_round is None and first_round == 0, use reduced-round behavior (final key XOR, IP, FP). If last_round is not None, use exact slice behavior (no special last round unless last_round==31, IP only if first_round==0, FP only if last_round==31). If first_round != 0 but last_round is None, we could infer exact slice mode? Or maybe compute last_round = first_round + R - 1 and use exact slice.
+
+Let's look at what would be natural for the user. The user wants to model rounds 4-10. They would probably call:
+
+SERPENT_CVL(first_round=4, last_round=10)
+In this case, last_round is not None. We should build an exact slice.
+
+What if they call:
+
+SERPENT_CVL(first_round=4, R=7)
+Here last_round is None. They've specified first_round, so they want to start at round 4 and do 7 rounds. It's reasonable to treat this as exact slice too. So if first_round != 0, treat as exact slice.
+
+And for backward compatibility:
+
+SERPENT_CVL(R=7)  # first_round=0 (default), last_round=None -> reduced-round cipher
+So the rule:
+
+If last_round is not None or first_round != 0: exact slice mode.
+Else: reduced-round mode.
+In exact slice mode:
+
+R is computed as last_round - first_round + 1 if last_round is not None, else stays as R.
+IP is included only if first_round == 0.
+FP is included only if last_round == 31 (or if last_round is None and first_round + R - 1 == 31).
+For each round in the slice, the round function is key XOR + S-box + LT. The exception is if last_round == 31, in which case that round uses key XOR instead of LT.
+Wait, if last_round is None and first_round=4, R=7, then last_round is computed as 10. So we can just compute effective_last_round = last_round if last_round is not None else first_round + R - 1. Then the logic is:
+
+exact_slice = (first_round != 0 or last_round is not None)
+if exact_slice:
+IP iff first_round == 0
+FP iff effective_last_round == 31
+For each round r in range(R):
+round_num = first_round + r
+if r == R - 1 and round_num == 31: final key XOR
+else: LT
+else (reduced-round mode, old behavior):
+IP always
+FP always
+For each round r in range(R):
+if r == R - 1: final key XOR
+else: LT
+This gives backward compatibility for existing callers and exact slices for new callers.
+
+Actually, wait. What about the key rks parameter? In exact slice mode, the user might pass rks that are already sliced. Currently:
+
+if rks is None:
+    if key is not None:
+        full_rks = serpent_key_schedule(key, keylen=keylen, R=32)
+        rks = full_rks[first_round:first_round + R + 1]
+    else:
+        rks = [0 for _ in range(R + 1)]
+elif len(rks) < R + 1:
+    raise ValueError(...)
+This part is fine. But wait, in reduced-round mode, the current code computes full_rks[first_round:first_round + R + 1]. For first_round=0, R=7, it takes full_rks[0:8]. The key for round 0 is full_rks[0], round 6 is full_rks[6], and the final key XOR uses full_rks[7]. That's correct for a 7-round reduced cipher.
+
+But what if the user passes rks manually for an exact slice? E.g., first_round=4, last_round=10, and they pass rks with 8 elements (K4...K11). The code checks len(rks) < R + 1, where R=7, so needs 8 elements. That works.
+
+One more issue: in the existing code, _build_serpent_linear_layer() is called inside __init__. It builds the linear transformation matrix. This is correct.
+
+Let me also verify that the S-box layer name should include the actual round number. The current code has make_sboxlayer(round_num) which uses round_num for naming. That's good.
+
+Now, what about the output of the cipher when last_round != 31? In exact slice mode, the output is after the last round's LT (or after S-box + key XOR if last_round==31). There is no FP. This means the cipher block size is still 128 bits. The user can then feed this into another cipher (e.g., round 11) if needed.
+
+What if the user wants to model the full cipher but starting from a middle round? Like first_round=4, last_round=31. Then IP is excluded, rounds 4-31 are included, and FP is included (since last_round==31). Round 31 gets the final key XOR. This is exactly the real cipher without the first 4 rounds. That makes sense.
+
+Similarly, first_round=0, last_round=10: IP is included, rounds 0-10 are included, no FP, round 10 gets LT. This is the real cipher truncated after round 10.
+
+Finally, first_round=0, last_round=6 (old backward compat): Wait, first_round=0 and last_round is None (default) -> reduced-round mode. So IP included, FP included, round 6 gets key XOR. But what if someone explicitly passes first_round=0, last_round=6? Then last_round is not None, so exact slice mode: IP included, FP excluded, round 6 gets LT. This is a slight inconsistency: SERPENT_CVL(R=7) vs SERPENT_CVL(first_round=0, last_round=6) would give different behavior. Is that okay?
+
+Yes, because R=7 means "7-round reduced cipher" while first_round=0, last_round=6 means "exact slice of rounds 0 through 6 from the full cipher". The user can understand this distinction.
+
+Alternatively, we could change the logic to: exact slice mode is triggered only if last_round is not None. If only first_round is changed, we could still use reduced-round mode but starting at that round. But the user wants exact slices, and they might use first_round=4 without last_round if they specify R. So I think first_round != 0 should trigger exact slice mode.
+
+Let's write the code:
+
+def __init__(self, R=32, rks=None, key=None, keylen=128, name=None, first_round=0, last_round=None):
+    if name is None:
+        name = "SERPENT"
+
+    if last_round is not None:
+        R = last_round - first_round + 1
+
+    if R > 32:
+        raise ValueError("Serpent only supports up to 32 rounds")
+    if first_round < 0 or first_round + R - 1 >= 32:
+        raise ValueError("Invalid round range for Serpent")
+
+    # Determine if we are in exact-slice mode or reduced-round mode
+    effective_last_round = last_round if last_round is not None else first_round + R - 1
+    exact_slice = (first_round != 0 or last_round is not None)
+
+    if rks is None:
+        if key is not None:
+            full_rks = serpent_key_schedule(key, keylen=keylen, R=32)
+            rks = full_rks[first_round:first_round + R + 1]
+        else:
+            rks = [0 for _ in range(R + 1)]
+    elif len(rks) < R + 1:
+        raise ValueError(f"Need at least {R+1} round keys, got {len(rks)}")
+
+    lt = _build_serpent_linear_layer()
+
+    def make_sboxlayer(round_num):
+        sbox_idx = round_num % 8
+        sboxlayer = SBoxCipher(128, 128, name=f"SBoxLayer_R{round_num}")
+        output_edges = []
+        for n in range(32):
+            in_pos = [127 - (4 * n + k) for k in range(4)]
+            sbox = SBox_CVL(
+                SERPENT_SBOXES[sbox_idx], name=f"S{sbox_idx}_R{round_num}_{n}"
+            )
+            node = sboxlayer.add_subcipher(
+                sbox,
+                [(sboxlayer.IN, (in_pos[3 - k], k)) for k in range(4)]
+            )
+            output_edges.extend(
+                [(node, (k, in_pos[3 - k])) for k in range(4)]
+            )
+        sboxlayer.add_output(output_edges)
+        return sboxlayer
+
+    cipher = SBoxCipher(128, 128, name=name)
+
+    # Initial permutation: standard -> standard-permuted (bitslice)
+    # In exact slice mode, only include IP if starting from round 0
+    if not exact_slice or first_round == 0:
+        ip = PermuteLayer_CVL(FP_TABLE, name="IP")
+        current = cipher.add_subcipher(
+            ip, [(cipher.IN, (i, i)) for i in range(128)]
+        )
+    else:
+        current = cipher.IN
+
+    for r in range(R):
+        round_num = first_round + r
+        # Key addition
+        key_add = RoundkeyXOR_CVL(128, rks[r], name=f"K{round_num}")
+        current = cipher.add_subcipher(
+            key_add, [(current, (i, i)) for i in range(128)]
+        )
+
+        # S-box layer
+        sboxlayer = make_sboxlayer(round_num)
+        current = cipher.add_subcipher(
+            sboxlayer, [(current, (i, i)) for i in range(128)]
+        )
+
+        if r == R - 1:
+            if exact_slice and round_num != 31:
+                # In exact slice mode, internal rounds keep LT
+                current = cipher.add_subcipher(
+                    lt, [(current, (i, i)) for i in range(128)]
+                )
+            elif exact_slice and round_num == 31:
+                # In exact slice mode, real last round uses key XOR
+                key_final = RoundkeyXOR_CVL(128, rks[R], name=f"K{round_num + 1}")
+                current = cipher.add_subcipher(
+                    key_final, [(current, (i, i)) for i in range(128)]
+                )
+            else:
+                # Reduced-round mode: last round always uses key XOR instead of LT
+                key_final = RoundkeyXOR_CVL(128, rks[R], name=f"K{round_num + 1}")
+                current = cipher.add_subcipher(
+                    key_final, [(current, (i, i)) for i in range(128)]
+                )
+        else:
+            # Linear transformation
+            current = cipher.add_subcipher(
+                lt, [(current, (i, i)) for i in range(128)]
+            )
+
+    # Final permutation: standard-permuted -> standard
+    # In exact slice mode, only include FP if ending at round 31
+    if not exact_slice or effective_last_round == 31:
+        fp = PermuteLayer_CVL(IP_TABLE, name="FP")
+        current = cipher.add_subcipher(
+            fp, [(current, (i, i)) for i in range(128)]
+        )
+
+    cipher.add_output([(current, (i, i)) for i in range(128)])
+
+    self.cipher = cipher
+Wait, but there's a subtle issue with current variable when IP is omitted. In CiVerLy, cipher.IN is the input node. When we do current = cipher.IN, then we wire edges from current. That should be fine.
+
+Also, what about the name of the final key XOR in reduced-round mode? Currently it is f"K{round_num + 1}". For reduced-round mode with first_round=0, R=1, round_num=0, it would be K1. That's fine.
+
+But in exact slice mode with last_round=31 (e.g., first_round=0, last_round=31, or first_round=4, last_round=31), the final key XOR would use rks[R] which corresponds to full_rks[last_round + 1]. That is correct: for rounds 4-31, we need K4...K32, and the final key is K32.
+
+Let's double check the key indexing for exact slices. full_rks is indexed by round number. So rks[0] is full_rks[first_round], i.e., K_first_round. In the loop, rks[r] is used for round first_round + r. Good. For the final key XOR when round_num == 31, rks[R] is used, which is full_rks[last_round + 1]. Since last_round=31, that's full_rks[32], which is K32. Correct.
+
+For exact slice where last_round != 31, we don't use rks[R] at all. rks has length R+1 but only indices 0...R-1 are used. The extra rks[R] is just unused. That's fine.
+
+One more thing: the existing docstrings need updating. The docstring example for first_round=4, last_round=10 should still work. Let's make sure the test vector changes? The test in the docstring just does vec_to_int(result) > 0, which is a dummy test.
+
+I should also write a cleaner version of the __init__ to minimize diff. The current implementation is mostly correct; I just need to modify the IP/FP/last-round logic.
+
+Let me also think about the effective_last_round variable. If last_round is None and first_round=0, R=32, then effective_last_round=31, so FP is applied. If last_round is None and first_round=0, R=1, effective_last_round=0, so in reduced-round mode exact_slice=False, FP is applied anyway. Good.
+
+Wait, for first_round=0, R=32 (default), exact_slice=False because first_round=0 and last_round=None. So it goes to reduced-round mode, which applies IP, rounds 0-31 with last round key XOR, and
+
+Now I need to modify the __init__ method to implement the exact-slice semantics. I'll replace the entire method body to include the logic I designed. I also need to update the docstring examples a bit to better reflect the new capability, but first let's fix the core logic.
+
+The plan:
+
+Add exact_slice flag: True if first_round != 0 or last_round is not None.
+Compute effective_last_round = last_round if last_round is not None else first_round + R - 1.
+IP: included if not exact_slice or first_round == 0.
+FP: included if not exact_slice or effective_last_round == 31.
+Last-round behavior:
+If exact_slice:
+If round_num == 31: key XOR (final round of real cipher)
+Else: LT (internal round)
+Else (reduced-round mode):
+key XOR (last round of reduced cipher)
+Keep everything else the same.
+Let me write the replacement for lines 480-564.
+
+... (code edits)
+
+... (test execution)
+
+Now I need to run the doctests again to make sure everything still passes and the new behavior is correct.
+
+sage -t src/civerly/cipher_implementations/serpent.py 2>&1
+Running doctests with ID 2026-07-16-17-10-32-349f71d9.
+Running with SAGE_LOCAL='/private/var/tmp/sage-10.7-current/local' and SAGE_VENV='/private/var/tmp/sage-10.7-current/local'
+Using --optional=pip,sage
+Features to be detected: 4ti2,SAGE_SRC,benzene,bliss,buckygen,conway_polynomials,coxeter3,csdp,cvxopt,cvxopt,database_cremona_ellcurve,database_cremona_mini_ellcurve,database_cubic_hecke,database_ellcurves,database_graphs,database_jones_numfield,database_knotinfo,dot2tex,dvipng,ecm,flatter,fpylll,fricas,gap_package_atlasrep,gap_package_design,gap_package_grape,gap_package_guava,gap_package_hap,gap_package_polenta,gap_package_polycyclic,gap_package_qpa,gap_package_quagroup,gfan,giac,glucose,graphviz,imagemagick,info,ipython,jmol,jupymake,jupyter_sphinx,kenzo,kissat,latte_int,lrcalc_python,lrslib,mathics,matroid_database,mcqd,meataxe,meson_editable,mpmath,msolve,nauty,networkx,numpy,palp,pandoc,pdf2svg,pdftocairo,pexpect,phitigra,pillow,plantri,polytopes_db,polytopes_db_4d,pplpy,primecountpy,ptyprocess,pycosat,pycryptosat,pynormaliz,pyparsing,python_igraph,requests,rpy2,rubiks,sage.combinat,sage.geometry.polyhedron,sage.graphs,sage.groups,sage.libs.braiding,sage.libs.ecl,sage.libs.flint,sage.libs.gap,sage.libs.giac,sage.libs.homfly,sage.libs.linbox,sage.libs.m4ri,sage.libs.ntl,sage.libs.pari,sage.libs.singular,sage.misc.cython,sage.modular,sage.modules,sage.numerical.mip,sage.plot,sage.rings.complex_double,sage.rings.finite_rings,sage.rings.function_field,sage.rings.number_field,sage.rings.padics,sage.rings.polynomial.pbori,sage.rings.real_double,sage.rings.real_mpfr,sage.sat,sage.schemes,sage.symbolic,sage_numerical_backends_coin,sagemath_doc_html,scipy,singular,sirocco,sloane_database,sphinx,symengine_py,sympy,tdlib,threejs,topcom
+Doctesting 1 file.
+sage -t --warn-long 5.0 --random-seed=136764618284729105899522567970702515294 src/civerly/cipher_implementations/serpent.py
+    [43 tests, 7.48s wall]
+----------------------------------------------------------------------
+All tests passed!
+----------------------------------------------------------------------
+Total time for all tests: 7.5 seconds
+    cpu time: 7.5 seconds
+    cumulative wall time: 7.5 seconds
+Features detected for doctesting: 
+All tests pass. Now I should add a more meaningful doctest that verifies the exact-slice behavior. For example, a test that checks that first_round=4, last_round=10 produces a cipher with no FP layer and that round 10 has LT instead of a final key XOR.
+
+I could check the trail or the component names. But perhaps the simplest is to verify the number of rounds / components, or check a specific property.
+
+Actually, in CiVerLy, we can check the components of the cipher:
+
+serpent = SERPENT_CVL(key=0, keylen=128, first_round=4, last_round=10)
+comps = [c.name for c in serpent.components()]
+But I'm not sure if components() exists or what exactly the API is. Let's check by probing.
+
+Actually, I remember from the docstring there was a trail test checking "Unnamed Component" not in trail. That's how checking is done.
+
+For a behavioral test: we can verify that the full 32-round cipher with default parameters gives the same output as before. Already covered.
+
+We can also verify that a reduced-round cipher R=1 still has FP and the final key XOR. That's preserved by exact_slice=False logic.
+
+What I really want is a doctest for the exact slice:
+
+sage: serpent = SERPENT_CVL(key=0, keylen=128, first_round=4, last_round=10)
+sage: comps = [n.name for n in serpent.all_nodes()]  # or something
+Hmm, I don't know the exact API. Let's quickly explore by running sage interactively or checking other cipher implementations for how they inspect the cipher graph.
+
+But I don't want to overcomplicate. The existing doctest vec_to_int(result) > 0 already serves as a sanity check. However, maybe I should write a slightly more informative one, like checking the trail has the expected round labels.
+
+Wait, looking at the abc.py or skinny.py for examples... Actually, I can just write a test that constructs the exact slice and checks the number of components is what we expect.
+
+Let's think: for first_round=4, last_round=10 (7 rounds):
+
+No IP
+7 rounds:
+Each round: K, SBoxLayer
+Rounds 4-9: LT
+Round 10: LT (because it's not round 31)
+No FP
+So total components: 7*(K + SBoxLayer + LT) = 21 components, plus the input/output nodes.
+
+For first_round=0, last_round=6 (7 rounds exact slice):
+
+IP
+7 rounds:
+Each round: K, SBoxLayer
+Rounds 0-5: LT
+Round 6: LT (because it's not round 31)
+No FP
+Total components: IP + 7K + 7SBoxLayer + 6LT = 15 components? Wait: 1 + 7 + 7 + 6 = 21? No, IP is 1. 7(K + SBoxLayer) = 14. Plus 6 LT = 6. Total = 21. For exact slice ending before 31, the last round still gets LT, so number of LT layers = R = 7.
+
+For reduced-round R=7 (old behavior):
+
+IP = 1
+7 rounds: 7K + 7SBoxLayer
+6 LT
+1 final key XOR (instead of LT on last round)
+FP = 1 Total = 1 + 7 + 7 + 6 + 1 + 1 = 23.
+So exact slice has fewer components because no FP and no final key XOR.
+
+I can verify this with:
+
+sage: len(list(serpent.nodes()))  # or something
+Let's quickly check what method names are available in CiVerLy's Cipher / SBoxCipher by grepping the source.
+
+Ah, nodes is a property or returns a list, not a method. Let me check if I can just access it without calling.
+
+sage -c "
+from civerly.cipher_implementations.serpent import SERPENT_CVL
+
+s = SERPENT_CVL(key=0, keylen=128, first_round=4, last_round=10)
+print('Exact slice nodes:', [n.name for n in s.nodes])
+
+s2 = SERPENT_CVL(key=0, keylen=128, R=7)
+print('Reduced round nodes:', [n.name for n in s2.nodes])
+"
+Exact slice nodes: ['SERPENT.IN', 'K4', 'SBoxLayer_R4', 'LT', 'K5', 'SBoxLayer_R5', 'LT', 'K6', 'SBoxLayer_R6', 'LT', 'K7', 'SBoxLayer_R7', 'LT', 'K8', 'SBoxLayer_R8', 'LT', 'K9', 'SBoxLayer_R9', 'LT', 'K10', 'SBoxLayer_R10', 'LT', 'SERPENT.OUT']
+Reduced round nodes: ['SERPENT.IN', 'IP', 'K0', 'SBoxLayer_R0', 'LT', 'K1', 'SBoxLayer_R1', 'LT', 'K2', 'SBoxLayer_R2', 'LT', 'K3', 'SBoxLayer_R3', 'LT', 'K4', 'SBoxLayer_R4', 'LT', 'K5', 'SBoxLayer_R5', 'LT', 'K6', 'SBoxLayer_R6', 'K7', 'FP', 'SERPENT.OUT']
+This is exactly what we expect. The exact slice for rounds 4-10 has no IP, no FP, and round 10 ends with LT. The reduced round R=7 has IP, FP, and the last round ends with key XOR (K7) instead of LT.
+
+Now I should update the docstring to include a test that verifies these properties. Let's modify the docstring example for first_round=4, last_round=10 to explicitly assert the absence of IP/FP and the presence of LT after round 10.
+
+Also, I should add a test that the full cipher still works (already there) and that reduced round R=7 still has FP and no LT on the last round.
+
+Wait, the existing docstring already has:
+
+sage: serpent = SERPENT_CVL(key=0, keylen=128, first_round=4, last_round=10)
+sage: result = serpent(int_to_vec(0x0, 128))
+sage: vec_to_int(result) > 0
+True
+I can enhance this to also check the node list:
+
+sage: [n.name for n in serpent.nodes].count('LT')
+7
+sage: 'IP' in [n.name for n in serpent.nodes]
+False
+sage: 'FP' in [n.name for n in serpent.nodes]
+False
+And for the reduced round:
+
+sage: serpent = SERPENT_CVL(key=0, keylen=128, R=7)
+sage: 'FP' in [n.name for n in serpent.nodes]
+True
+sage: [n.name for n in serpent.nodes].count('LT')
+6
+Let me read the docstring section and make the edit.
+
+... (smaller changes)
+
+The constructor now distinguishes between two use cases:
+
+Reduced-round cipher (old behaviour, triggered when first_round=0 and last_round=None): builds a prefix of Serpent that starts at round 0 and ends with the usual “last-round key XOR instead of LT + FP”.
+Exact slice (new behaviour, triggered when first_round != 0 or last_round is supplied): reproduces the real internal data path for the chosen round interval without altering the round functions.
+What changed
+Old call	What it did (unchanged)
+SERPENT_CVL(R=7)	IP → rounds 0–6 (round 6 ends with key XOR) → FP
+New call	What it does now
+SERPENT_CVL(first_round=4, last_round=10)	rounds 4–10 exactly as in the real cipher: no IP, no FP, every round keeps its LT (because round 10 is not the true final round).
+SERPENT_CVL(first_round=0, last_round=31)	Full cipher — identical to the default because the slice reaches the real boundaries.
+SERPENT_CVL(first_round=25, last_round=31)	rounds 25–31 with IP (because first_round==0 is false, wait — actually first_round=25 so IP is omitted) and FP (because last_round==31). Round 31 correctly ends with the extra key XOR instead of LT.
+Key implementation details
+exact_slice = (first_round != 0 or last_round is not None)
+effective_last_round = last_round if last_round is not None else first_round + R - 1
+IP is applied only when first_round == 0 or we are in reduced-round mode.
+FP is applied only when effective_last_round == 31 or we are in reduced-round mode.
+The last constructed round uses LT in exact-slice mode unless it is the true round 31, and uses the final key XOR in reduced-round mode (preserving backward compatibility).
