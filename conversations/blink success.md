@@ -2541,3 +2541,1397 @@ Validation
 All 28 doctests pass (sage -t src/civerly/cipher_implementations/blink.py).
 Manually verified all 6 published test vectors match the reference implementation.
 
+
+User:
+Please refine the implementation of blink in @src/civerly/cipher_implementations/blink.py  to perform attacks for a variable number of  forward and inverse rounds by passing optional parameters (for the rl and rr rounds) to the constructor for an object. I wan to test some claims stated in the paper @documentation/analysis.md . The guide @documentation/README.md also holds information on this topic, too. For completeness, you can find a reference implementation @documentation/blink.py  and further information @documentation/blink.md . If you need further information, please come forward.
+
+The user wants to refine the BLINK_CVL implementation in src/civerly/cipher_implementations/blink.py to allow testing claims from the paper. Specifically, they want to be able to construct a cipher with a variable number of forward rounds (rl) and inverse rounds (rr).
+
+From documentation/analysis.md, I see claims about:
+
+Differential analysis (10-round distinguisher for Blink-64, etc.)
+Impossible differential attacks with r1 rounds of the upper half and r2 rounds of the lower half.
+The current BLINK_CVL class hardcodes the full cipher structure with ra forward rounds in the first half, rb in the second, then rb backward and ra backward. The user wants to be able to pass rl and rr (or similar) to choose how many forward rounds and how many inverse rounds to include. This sounds like they want to construct a reduced-round version of the cipher, specifically for analyzing the "upper half" and "lower half" mentioned in the impossible differential analysis.
+
+Let's re-read the blink.py source and the analysis.md carefully.
+
+The structure of Blink is:
+
+Whitening w0
+ra forward keyed rounds (R)
+Middle: S, M, AK(h0), P
+rb forward keyed rounds (R)
+Middle: S, M, AK(h0^h1), S
+rb backward keyed rounds (R^-1)
+Middle: P^-1, AK(h1), M, S
+ra backward keyed rounds (R^-1)
+Whitening w1
+In analysis.md, impossible differential attacks are described as "r1-rounds of the upper half and r2-rounds of the lower half". The "upper half" likely refers to the rounds above the center, and the "lower half" to the rounds below. For Blink, the upper half could mean the rounds from the start towards the middle, and the lower half from the middle to the end.
+
+The user wants "optional parameters (for the rl and rr rounds)". This likely means:
+
+rl: number of rounds in the left (upper) part.
+rr: number of rounds in the right (lower) part.
+But we need to be careful. The paper says "considering r1-rounds of the upper half and r2-rounds of the lower half". The upper half of Blink is ra + 1 + rb rounds (if we count from whitening w0 to the center S), but the rounds themselves are the keyed rounds and the middle rounds. Let's look at the structure.
+
+Actually, in the analysis of impossible differentials, one usually considers a truncated cipher consisting of r1 rounds forward from plaintext and r2 rounds backward from ciphertext, leaving a 'miss-in-the-middle' in the middle. For a reflective cipher like Blink, the structure is symmetric.
+
+Let's look at how the user phrased it: "perform attacks for a variable number of forward and inverse rounds by passing optional parameters (for the rl and rr rounds) to the constructor for an object."
+
+This means they want a BLINK_CVL where instead of the full ra, rb, etc., they can specify rl and rr to build an object with:
+
+rl forward rounds at the beginning?
+rr inverse rounds at the end?
+Or perhaps rl rounds of the upper half and rr rounds of the lower half. Let's think about what would be useful for impossible differentials.
+
+For the impossible differential claims:
+
+Blink-64: longest impossible differential spans 7 rounds.
+Blink-128: spans 9 rounds.
+These are constructed as r1 + r2 impossible differential trails. So the user might want to construct a cipher that has r1 rounds of the forward part and r2 rounds of the inverse part, or some combination. However, for impossible differential analysis of the center structure, they might want to construct a cipher that only contains a certain number of rounds.
+
+But BLINK_CVL returns a cipher object for modeling. If we want to test claims like "7 rounds impossible differential", we usually don't need a new cipher class but rather analyze the existing full cipher and constrain the model. However, the user explicitly wants to pass rl and rr to the constructor to build a reduced-round or partial-round object.
+
+What would be the most natural interpretation? The construction has:
+
+ra rounds of type Fwd
+1 middle stage (S, M, AK(h0), P)
+rb rounds of type Fwd
+1 middle stage (S, M, AK(h0^h1), S)
+rb rounds of type Bwd
+1 middle stage (P^-1, AK(h1), M, S)
+ra rounds of type Bwd
+Total keyed rounds = ra + rb + rb + ra = 2*(ra+rb). Plus the middle stages.
+
+If the user wants rl forward rounds and rr inverse rounds, maybe they want:
+
+Up to rl forward rounds from the start (could be toward the middle)
+Up to rr inverse rounds from the end (could be from the middle backward)
+But in the context of impossible differentials, rl and rr usually mean left rounds and right rounds, i.e., rounds added on the left (encryption) and right (decryption) of a distinguisher. The distinguisher is typically in the middle.
+
+Wait, could it be that they want to parameterize the number of rounds of the round function R applied in the upper part and lower part? The upper half consists of ra + rb keyed rounds. The lower half also consists of ra + rb keyed rounds. If rl and rr are the numbers of rounds, they might want to replace ra and rb with rl and rr in the round counts. But ra and rb are fixed by the variant configuration based on key length. The constructor already infers ra and rb if key is not provided.
+
+Let's search for "rl" or "rr" in the documentation or code. I don't see rl or rr in the provided snippets.
+
+Let's think about how other ciphers in CiVerLy handle variable rounds. Let's check abc.py or present.py for examples. Since I don't have those files open, I'll rely on the README snippets.
+
+The README says in section 6: "If the key schedule matters to your analysis, model it as a dedicated subcipher instead of hard-coding the constants in the round function." and "if the examples in skinny.py or abc.py set round constants on a node before each round, follow that pattern".
+
+For variable rounds, the typical approach is to pass R to the constructor.
+
+But the user specifically asks for rl and rr. Let's re-read analysis.md carefully.
+
+Section 7.2: "We explored the impossible differential trails for the center structure, considering r1-rounds of the upper half and r2-rounds of the lower half."
+
+So the full upper half has some number of rounds, and the full lower half has some number. The user wants to test different numbers of upper and lower rounds. This means we should allow construction of a cipher that contains only r1 rounds of the upper half and r2 rounds of the lower half.
+
+What exactly constitutes the "upper half" and "lower half"? Based on Figure 2 in blink.md: Upper half (from top to center):
+
+Whitening w1
+ra rounds of R (S, MK, P)
+Middle: S, MK(h1), P
+rb rounds of R (S, MK, P)
+Middle: S, MK(h(t))
+Wait, looking at the figure in blink.md: The top part is: w1 S MK P (rk1 ⊕ rc1) ... S MK P (rka ⊕ rca) S MK P (h1(t)) S MK P (rka+1 ⊕ rca+1) ... S MK P (rka+b ⊕ rca+b) S MK h(t)
+
+Then the bottom part is: S MK P (drk1 ⊕ drc'1) ... S MK P (drkb ⊕ drc'b) S MK P (dh2(t)) S MK P (drkb+1 ⊕ drc'b+1) ... S MK P (drka+b ⊕ drc'a+b) w2
+
+Wait, this figure is symmetric. The reflection point seems to be after the h(t) middle stage. Actually, the full construction is: pi1: M o S o Ra(. xor w1) -- this seems odd. Let's look at the text.
+
+Text says: "Blink corresponds to the four permutations in THF as: • π1: M ◦ S ◦ Ra(• ⊕ w1), • π2: M ◦ S ◦ Rb ◦ P, • π3: P ◦ Rb ◦ S, • π4: Ra ◦ S ◦ M(•) ⊕ w2"
+
+This is a bit confusing.
+
+Let's look at the reference implementation in documentation/blink.py:
+
+def encrypt(self, state, rk, w, h):
+    self.whitening(state, w[0])
+    for r in range(self.ra):  # R
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, rk[r])
+        self.add_round_constant(state, self.round_const[r])
+        self.permutation(state)
+    self.sub_bytes(state)     # Middle 1
+    self.mix_columns(state)
+    self.add_round_key(state, h[0])
+    self.permutation(state)
+    for r in range(self.rb):  # R
+        self.sub_bytes(state)
+        self.mix_columns(state)
+        self.add_round_key(state, rk[r + self.ra])
+        self.add_round_constant(state, self.round_const[r + self.ra])
+        self.permutation(state)
+    
+    h_xor = ...
+    self.sub_bytes(state)     # Center
+    self.mix_columns(state)
+    self.add_round_key(state, h_xor)
+    self.sub_bytes(state)
+    
+    for r in range(self.rb):  # R^-1
+        self.inv_permutation(state)
+        self.add_round_constant(state, self.round_const_prime[r])
+        self.add_round_key(state, rk[r])
+        self.mix_columns(state)
+        self.sub_bytes(state)
+    self.inv_permutation(state) # Middle 2
+    self.add_round_key(state, h[1])
+    self.mix_columns(state)
+    self.sub_bytes(state)
+    for r in range(self.ra):  # R^-1
+        self.inv_permutation(state)
+        self.add_round_constant(state, self.round_const_prime[r + self.rb])
+        self.add_round_key(state, rk[r + self.rb])
+        self.mix_columns(state)
+        self.sub_bytes(state)
+    self.whitening(state, w[1])
+The upper half could be considered the encryption rounds from the top to the center reflective point:
+
+ra forward rounds
+middle (S, M, AK(h0), P)
+rb forward rounds
+center (S, M, AK(h_xor), S)
+And the lower half from the center to the bottom:
+
+rb backward rounds
+middle (P^-1, AK(h1), M, S)
+ra backward rounds
+Wait, in the impossible differential analysis of a reflective structure, you typically take:
+
+r1 rounds of the forward direction starting from the plaintext
+r2 rounds of the backward direction starting from the ciphertext And check if a difference can propagate through the middle.
+The middle is where the reflection occurs. The center stage is S, M, AK(h_xor), S. In the analysis of impossible differentials for the "center structure", they might look at the rounds around the center. For example:
+
+Upper half: the rounds above the center (i.e., ra fwd + middle + rb fwd). If they take r1 rounds of the upper half, they might mean r1 of these rounds, not necessarily the full ra+1+rb.
+Lower half: the rounds below the center (i.e., rb bwd + middle + ra bwd).
+But usually, in a reflection construction, the impossible differential spans the center and extends some rounds forward and some rounds backward. For instance, if the center has probability 1 characteristics, and adding rounds makes it impossible.
+
+Given the paper says "r1-rounds of the upper half and r2-rounds of the lower half", and the full upper half is ra rounds + middle + rb rounds (or perhaps just the keyed rounds), it's most likely they count the round function applications R.
+
+However, from a modeling perspective in CiVerLy, it's easiest if the user can specify:
+
+forward_rounds: how many rounds of the forward round function R to include at the beginning of the upper half.
+inverse_rounds: how many rounds of the inverse round function R^-1 to include at the end of the lower half.
+But wait, the user said "optional parameters (for the rl and rr rounds)". Let's assume rl = rounds on the left (upper), rr = rounds on the right (lower).
+
+If we allow constructing a cipher with rl rounds and rr rounds, what does that look like? Perhaps:
+
+Start with whitening w0
+Then rl forward rounds (using round keys rk[0..rl-1] and constants rc[0..rl-1])
+Then some middle structure?
+Then rr inverse rounds (using round keys rk[...] and constants rc_prime[...])
+Then whitening w1?
+But that skips the central middle stages, which wouldn't be a valid Blink construction. Maybe the user wants to test the center structure by taking rl rounds from the upper half and rr rounds from the lower half, leaving the middle intact? Or maybe they want to parameterize the number of forward and backward rounds independently, replacing the fixed ra and rb.
+
+Let's look at ra_rb_from_n_t in the current code:
+
+def ra_rb_from_n_t(n, t):
+    if n == 64:
+        return 5
+    if t == 128:
+        return 6
+    return 8
+This returns ra+rb. In _variant_config, ra and rb are:
+
+n=64: ra=2, rb=3
+n=128, key=128: ra=3, rb=3
+n=128, key=160: ra=3, rb=5
+The total number of forward rounds (upper half) is ra + rb. The paper says: "For Blink-64, the longest impossible differential trail spans 7 rounds, while it spans 9 rounds for Blink-128." For Blink-64, ra+rb = 5. 7 rounds spanning upper and lower halves. 7 = 3 + 4? or 4 + 3? It spans 7 rounds total. How does this relate to ra, rb?
+
+In the encrypt function of Blink, the total number of "rounds" in the paper corresponds to each application of S-box layer. The upper half has:
+
+ra rounds of R (each has S, M, AK, AC, P) = ra rounds
+1 middle stage (S, M, AK(h0), P) = 1 round? (It has S and M)
+rb rounds of R = rb rounds
+Total upper rounds = ra + 1 + rb = 2 + 1 + 3 = 6 for Blink-64. Wait, but the paper says longest impossible differential spans 7 rounds for Blink-64. Perhaps they count the whitening or the center differently.
+
+Actually, in section 7.2: "We explored the impossible differential trails for the center structure, considering r1-rounds of the upper half and r2-rounds of the lower half... For Blink-64, the longest impossible differential trail spans 7 rounds, while it spans 9 rounds for Blink-128."
+
+If the full upper half is 5 rounds (ra+rb), and the full lower half is 5 rounds, then 7 rounds could be 4+3, 3+4, 5+2, etc. For Blink-64 (ra=2, rb=3): Upper half = 5 rounds. Lower half = 5 rounds. Longest impossible diff = 7 rounds. This means r1+r2 = 7, with r1 <= 5 and r2 <= 5. 3+4 or 4+3.
+
+For Blink-128 (ra=3, rb=3 for 128a/b, or ra=3, rb=5 for 128A/B): If 128a: ra+rb = 6. 9 rounds = 5+4 or 6+3 or something. If 128A: ra+rb = 8. 9 rounds = 5+4 or something.
+
+This aligns with r1 rounds of upper half and r2 rounds of lower half, where r1 <= ra+rb and r2 <= ra+rb (or perhaps including the middle stages).
+
+Wait, let's count the stages in the actual encryption as "rounds": Upper half:
+
+Rounds 1..ra: FwdRound
+Middle: S, M, AK(h0), P (this is not a full fwd round, but has S and M)
+Rounds ra+1 .. ra+rb: FwdRound (i.e., rb more rounds) Total S-box layers in upper half before center = ra + 1 + rb. For 64: 2 + 1 + 3 = 6. For 128a: 3 + 1 + 3 = 7. For 128A: 3 + 1 + 5 = 9.
+But the impossible differential is 7 rounds for 64 and 9 for 128. That matches 6+? No. If the upper half has ra + rb rounds (not counting the middle S,M), then for 64 it's 5. For 128a it's 6. For 128A it's 8. 9 rounds for 128A is 8+1? That would be upper half + 1 lower round.
+
+Actually, in the paper's analysis section (7), it says: "Each round containing an S-box layer is counted as a single round in the overall round count." So each S-box application is one round. Let's count S-box applications in full Blink-64:
+
+ra fwd rounds: ra S-box layers
+middle h0: 1 S-box layer (only one S)
+rb fwd rounds: rb S-box layers
+center h_xor: 2 S-box layers (S before and after)
+rb bwd rounds: rb S-box layers
+middle h1: 1 S-box layer
+ra bwd rounds: ra S-box layers Total = ra + 1 + rb + 2 + rb + 1 + ra = 2*(ra+rb) + 4 = 2*5 + 4 = 14 rounds. This matches the text: "Consequently, for the 14-round Blink-64...".
+So for Blink-64, the upper half consists of ra + 1 + rb = 6 rounds (before the center 2-round reflection), and the lower half consists of rb + 1 + ra = 6 rounds after the center. Wait, the center itself is 2 rounds (S MK AK S). The upper half is often considered the rounds from plaintext to the center: ra + 1 + rb = 6 rounds. Lower half from center to ciphertext: rb + 1 + ra = 6 rounds. But 6 + 6 = 12, plus center 2 = 14 total. Perfect. For Blink-128a: ra=3, rb=3. Upper half = 3+1+3 = 7 rounds. Lower half = 7 rounds. Total = 7+7+2 = 16 rounds. For Blink-128A: ra=3, rb=5. Upper half = 3+1+5 = 9 rounds. Lower half = 9 rounds. Total = 9+9+2 = 20 rounds.
+
+The paper claims impossible differentials span 7 rounds for Blink-64 and 9 rounds for Blink-128. For Blink-64, 7 < 12 (upper+lower without center). This likely means r1 + r2 = 7, where r1 is from the upper half (max 6) and r2 from the lower half (max 6). 3+4 or 4+3. For Blink-128, 9 rounds. If 128a: upper=7, lower=7. 9 = 4+5 or 5+4. If 128A: upper=9, lower=9. But the text just says "Blink-128", maybe referring to the 128b (which is like 128a with larger tweak) or 128a/b. The table might distinguish.
+
+To test these claims, the user wants to be able to build a cipher that consists of rl rounds of the upper half and rr rounds of the lower half. But what exactly should be included in those rounds?
+
+For an impossible differential, you typically take the cipher and analyze the propagation of differences. In CiVerLy, you could analyze the full cipher and just look at trails of length rl + rr. But the user might want to build a reduced-round variant object for modeling, which includes exactly rl rounds from the top and rr rounds from the bottom, connected at the center.
+
+Wait, maybe rl and rr refer to the number of keyed rounds, and the middle stages are always included? For example:
+
+rl forward keyed rounds, then the middle stages (h0, then rb? No.)
+Let's look at the implementation of BLINK_CVL. The constructor builds the full graph. To support variable rl and rr, we could modify the constructor to accept rl and rr, and then build a cipher that consists of:
+
+rl rounds from the upper half (starting from w0)
+followed by some middle section
+followed by rr rounds from the lower half (ending with w1)
+But what is the "upper half"? The first ra rounds, then the h0 middle, then the next rb rounds. So there are ra + rb + 1 = ra+rb+1 S-box layers before the center. The user might want rl to be the number of layers to include from the beginning.
+
+However, the term "rounds" in the context of the paper's analysis means "rounds of the round function R" or "S-box layers". For the impossible differential in reflective ciphers, the distinguisher is usually placed across the center, and one considers r1 rounds of the forward direction and r2 rounds of the backward direction. The forward direction means the rounds above the center (including possibly the middle stage with h0), and the backward direction means the rounds below the center.
+
+Actually, the simplest and most flexible approach: let rl be the number of forward rounds to include from the top, and rr be the number of inverse rounds to include from the bottom. The middle section is fully included to make a valid reflective cipher.
+
+Wait, but that wouldn't produce a standard reduced-round version because you'd have a giant gap in the middle. That doesn't make sense for encryption.
+
+Alternatively, rl could be the number of forward rounds of the upper half, and rr the number of inverse rounds of the lower half, with the center always included. This means:
+
+Start: w0 whitening
+Then rl rounds from the upper half (we have a pool of ra rounds, then the h0 middle, then rb rounds).
+Then the center stage (S, M, AK(h_xor), S)
+Then rr rounds from the lower half (pool of rb inverse rounds, then h1 middle, then ra inverse rounds).
+End: w1 whitening
+This makes sense! The user wants to study the behavior around the center with a variable number of rounds on each side.
+
+But how do we map rl to the actual sequence of upper-half rounds? The upper half has the sequence: FwdRound(r=0), FwdRound(r=1), ..., FwdRound(r=ra-1), [middle S,M,AK(h0),P], FwdRound(r=ra), ..., FwdRound(r=ra+rb-1). That's ra + rb keyed rounds and one extra S,M,P layer.
+
+If rl counts S-box layers:
+
+rl = 1 to ra: just the first rl FwdRounds.
+rl = ra + 1: first ra FwdRounds + h0 middle (which has 1 S-box layer)
+rl = ra + 2 to ra + rb + 1: first ra FwdRounds + h0 middle + first rl - ra - 1 FwdRounds of the second chunk. This is getting complicated.
+Similarly for the lower half: BwdRound(r=0), ..., BwdRound(r=rb-1), [P^-1, AK(h1), M, S], BwdRound(r=rb), ..., BwdRound(r=ra+rb-1). Wait, looking at the code for encrypt: After the center:
+
+rb times: inv_perm, AC', AK(rk[r]), mix_columns, sub_bytes
+inv_perm, AK(h1), mix_columns, sub_bytes
+ra times: inv_perm, AC', AK(rk[r+rb]), mix_columns, sub_bytes
+whitening w1
+So the lower half (below center) is:
+
+rb inverse rounds
+h1 middle (1 S-box)
+ra inverse rounds
+If rr is the number of S-box layers from the lower half:
+
+rr = 1 to rb: last rr inverse rounds? Or first rr inverse rounds from the center? In impossible differentials, we usually extend rr rounds backward from the center (or from ciphertext).
+To keep it simple and useful, we should allow parameterizing the number of rounds of the round function R and R^{-1} included in the construction, but we must decide whether the middle stages are included or counted.
+
+Given the user says "variable number of forward and inverse rounds", I'll assume they want to control:
+
+How many forward rounds rl to apply in the upper branch.
+How many inverse rounds rr to apply in the lower branch. And the middle "reflection" stages (h0, h_xor, h1) should be included fully or in a way that makes sense.
+Actually, looking at how attacked ciphers are typically modeled in CiVerLy for impossible differentials, one usually builds the full cipher and then searches for trails with constraints. However, the user specifically wants a constructor with rl and rr parameters. This is likely because they want to evaluate reduced-round versions of Blink, i.e., a version with only rl forward rounds and rr inverse rounds in total.
+
+Let's look at the paper's wording again: "We explored the impossible differential trails for the center structure, considering r1-rounds of the upper half and r2-rounds of the lower half."
+
+If I were to build a "reduced upper half" and "reduced lower half" cipher, I would include:
+
+Upper half: r1 rounds of the encryption sequence starting from plaintext.
+Lower half: r2 rounds of the decryption sequence starting from ciphertext. And meet in the middle at the center.
+But what constitutes the "center structure"? The center is the reflection point. The middle stages are not the round function R. If we take r1 rounds of the upper half, we'd include the rounds that are closest to the center? Or from the outside in?
+
+In impossible differential attacks, you take some rounds from the top and some from the bottom. So if r1=2 and r2=2 for Blink-64, you'd have:
+
+Top 2 rounds: w0, then 2 FwdRounds (ra=2), then middle h0, then... wait, if r1=2, does it include the h0 middle? Usually, when they say "r1-rounds of the upper half", they mean r1 rounds of the keyed round function R in the upper half. The upper half has ra rounds before h0 and rb rounds after h0. But h0 itself is a "middle stage", not a keyed round.
+Let's think about what is practical to implement. The most useful interpretation is probably:
+
+rl: number of rounds to include from the start (plaintext side), composed of forward rounds.
+rr: number of rounds to include from the end (ciphertext side), composed of inverse rounds. And we connect them directly, skipping the middle inactive rounds. But then the key schedule would change, and the middle hash constants h0, h1, h_xor would be missing. That's not a reduced-round Blink; it's a truncated one.
+Another interpretation: The user wants to vary the total number of rounds. The full cipher for Blink-64 has ra forward, then rb forward, then rb backward, then ra backward. If they pass ra=2, rb=3, it's full. If they pass smaller numbers, it's reduced. But ra and rb are determined by the key size.
+
+Wait, in the current BLINK_CVL.__init__, the key_bytes is inferred from key or from ra_rb_from_n_t(n, t). The full cipher uses all of ra and rb. Maybe the user wants extra parameters like forward_rounds and backward_rounds to override the default ra and rb counts? For example, for a given variant, the master key size is fixed (56 bytes for 64-bit), but you can choose to only use rl of the first chunk and rr of the second chunk. But the current implementation already uses all available round keys.
+
+Actually, for impossible differential analysis, the key values don't matter, only the structure. So we can re-use the same key schedule values but just add fewer rounds.
+
+If we look at the documentation/blink.py reference code, ra and rb are fixed per variant. The constructor takes ra and rb. In BLINK_CVL, they are derived. To make them variable, the simplest way is to add optional rl and rr parameters that override ra and rb respectively.
+
+Let's check the user's wording carefully: "refine the implementation ... to perform attacks for a variable number of forward and inverse rounds by passing optional parameters (for the rl and rr rounds) to the constructor for an object."
+
+"forward and inverse rounds" -> rl = number of forward rounds, rr = number of inverse rounds. This strongly suggests replacing ra and rb counts with rl and rr. In Blink:
+
+Forward rounds: ra rounds of type R (upper) + rb rounds of type R (middle-upper) = ra+rb forward rounds in total? No. Actually, from the top half, all rounds until the center are "forward" with respect to the encryption direction. From the bottom half, all rounds are "inverse". So the full cipher has ra+rb forward rounds (upper) and ra+rb inverse rounds (lower), but with the center and middle stages in between.
+If rl replaces ra and rr replaces rb, that would be natural. Or rl is the number of forward rounds in the first chunk and rr is the number of forward rounds in the second chunk? That doesn't match "forward and inverse".
+
+Wait, maybe rl means "rounds left" and rr means "rounds right". If we think of the center as the reflection point:
+
+Left side (upper half): ra then rb rounds, moving down towards the center.
+Right side (lower half): rb then ra rounds, moving down from the center. If rl = ra, rr = rb, then:
+Left: rl FwdRounds, Middle(h0), rr FwdRounds, Center, rr BwdRounds, Middle(h1), rl BwdRounds. This is exactly the structure! And this makes perfect sense: the construction is parameterized by rl and rr where the full variant has specific values. For example:
+Blink-64: rl=2, rr=3.
+Blink-128a: rl=3, rr=3.
+Blink-128A: rl=3, rr=5.
+If the user wants to test variable numbers, they should be able to pass rl and rr to the constructor. If omitted, they default to the variant's standard values.
+
+This is the most natural interpretation. For example, if they pass rl=1, rr=1, they get a very reduced version:
+
+w0
+1 fwd round (rk0, rc0)
+middle S,M,AK(h0),P
+1 fwd round (rk1, rc1)
+center S,M,AK(h0^h1),S
+1 bwd round (rc'0, rk0)
+middle P^-1,AK(h1),M,S
+1 bwd round (rc'1, rk1)
+w1
+This would allow testing impossible differentials with fewer rounds by simply changing rl and rr.
+
+But we need to be careful with the round constants and round keys. The constants ROUND_CONST_64 has 5 rows (ra+rb=5). If rr=1, which constant should be used? For the forward rounds:
+
+First chunk uses constants rc[0..rl-1]
+Second chunk uses constants rc[rl .. rl+rr-1] But rl+rr must be <= len(rc).
+For blink-64, len(rc) = 5. If the user passes rl=3, rr=2, total is 5, which is fine. If they pass rl=3, rr=3, total is 6, which is more than available constants. We should probably allow it but reuse constants modulo, or just assert that rl+rr does not exceed the available constants.
+
+Actually, for testing attack claims, they might only need values where rl <= ra and rr <= rb (or slightly more). But since the constants are pre-defined, and the key schedule generates enough round keys (ra+rb keys), if the user passes rl and rr such that rl+rr > len(rk), we need to handle it. However, since ra and rb are fixed by the variant (key size), and the key size is fixed, we have exactly ra+rb round keys available.
+
+If we treat rl and rr as replacing ra and rb, then the key schedule still produces ra+rb round keys. We should probably just use the first rl keys for the first chunk, next rr keys for the second chunk, etc., and require rl + rr <= ra + rb of the variant. But the key size is constant, so we have ra+rb keys. If rl+rr < ra+rb, some keys are unused.
+
+Wait, but the whitening keys w[0], w[1] and the hash values h[0], h[1] also depend on the full master key. If we use a short rl and rr with the same master key size, that's fine: we compute everything and just don't use some round keys.
+
+This seems reasonable and easy to implement. We just need to:
+
+Accept rl and rr in __init__ (defaulting to None).
+Compute the default ra, rb from the variant config.
+If rl is None, set rl = ra. If rr is None, set rr = rb.
+Assert rl <= ra + rb? Actually, no. The structure requires rl forward rounds in the first branch and rl inverse rounds in the last branch. The key schedule provides ra+rb round keys. If rl > ra+rb, there aren't enough keys. But for testing attack claims from the paper, rl and rr would be within the original bounds. We
+
+The user wants to modify BLINK_CVL to accept optional rl and rr parameters to control the number of forward and inverse rounds, respectively. This will allow them to test claims from the paper about reduced-round impossible differentials and differential characteristics.
+
+Based on the paper's structure:
+
+Blink has a reflective construction.
+The upper half consists of ra forward rounds, then a middle stage (S, M, AK(h0), P), then rb forward rounds.
+The center is (S, M, AK(h0^h1), S).
+The lower half consists of rb backward rounds, then a middle stage (P^-1, AK(h1), M, S), then ra backward rounds.
+The user's request for rl and rr rounds suggests:
+
+rl: number of rounds to include in the left (upper) forward branch from the start.
+rr: number of rounds to include in the right (lower) inverse branch to the end.
+But we need to be careful: the full cipher is symmetric around the center. If we reduce rl and rr, do we keep the middle structure intact? Actually, the paper's analysis of impossible differentials talks about "r1-rounds of the upper half and r2-rounds of the lower half". This implies taking rounds from the upper half and rounds from the lower half and analyzing the center structure between them.
+
+In a practical reduced-round construction for cryptanalysis, we want a valid encryption function with fewer rounds. However, Blink's round counts ra and rb are tied to the key schedule. If we simply reduce rl and rr while keeping the same master key size, we can just use the corresponding subset of round keys and constants. The middle stages (h0, h_xor, h1) remain as they are essential to the reflective structure.
+
+So, a natural interpretation is:
+
+rl: replace the default ra (first chunk of forward rounds). If rl < ra, we use fewer forward rounds at the beginning.
+rr: replace the default rb (second chunk of forward rounds). If rr < rb, we use fewer forward rounds in the second chunk.
+Wait, the user said "forward and inverse rounds". So:
+
+rl is the number of forward rounds on the upper-left side.
+rr is the number of inverse rounds on the lower-right side.
+But the cipher has ra rounds on the upper-left and ra rounds on the lower-right. And rb rounds on the middle-upper and rb rounds on the middle-lower. If the user wants to vary both the forward rounds and the inverse rounds independently, perhaps rl controls the total number of forward keyed rounds above the center, and rr controls the total number of inverse keyed rounds below the center.
+
+Let's look at the structure of the paper's claims:
+
+"For Blink-64, the longest impossible differential trail spans 7 rounds" where 7 = r1 + r2.
+The upper half has ra + rb = 5 rounds.
+The lower half has ra + rb = 5 rounds.
+So 7 rounds means taking, say, r1=3 rounds from the upper half and r2=4 from the lower half (or vice versa).
+In the actual cipher graph construction: Upper half rounds toward the center (from w0):
+
+ra FwdRounds
+Middle stage (S, M, AK(h0), P) - this is not keyed, but is a "round" in terms of S-box count.
+rb FwdRounds
+Then center: (S, M, AK(h_xor), S)
+
+Lower half rounds from the center (toward w1): 4. rb BwdRounds 5. Middle stage (P^-1, AK(h1), M, S) - another S-box round. 6. ra BwdRounds
+
+If the user wants to test impossible differentials with r1 and r2 rounds, they might want to take:
+
+r1 rounds from the upper half (could be 1..ra+rb+1 if counting the middle h0 stage)
+r2 rounds from the lower half (could be 1..ra+rb+1 if counting the middle h1 stage)
+But for a CiVerLy model, it's easiest to just build a reduced-round cipher that has rl forward rounds and rr backward rounds where rl replaces ra and rr replaces rb. This changes the shape to:
+
+rl FwdRounds (instead of ra)
+middle h0 + P
+rr FwdRounds (instead of rb)
+center
+rr BwdRounds
+middle h1 + ...
+rl BwdRounds
+This makes the cipher parameterized by rl and rr, symmetric like the original. The default values would be rl=ra, rr=rb of the variant. This directly corresponds to the paper's parameters a and b.
+
+This is clean because:
+
+The number of forward rounds on the left = rl.
+The number of forward rounds on the right of the center (before reflection) = rr.
+The number of inverse rounds on the right of the center = rr.
+The number of inverse rounds on the far right = rl.
+Wait, the paper uses a and b:
+
+ra = a rounds at the very top
+rb = b rounds in the middle-top
+rb = b rounds in the middle-bottom
+ra = a rounds at the very bottom
+So rl and rr map perfectly to a and b. Let's call the constructor parameters rl and rr (or maybe a and b would be more consistent, but the user specifically asked for rl and rr).
+
+So:
+
+rl replaces ra
+rr replaces rb
+This means we need to:
+
+Compute the variant's default ra, rb and available constants/keys.
+If rl is provided, assert 0 <= rl <= len(rc) or more precisely rl <= ra + rb? Actually, rl round keys are needed for the first chunk, and rl round keys for the last chunk. The total available round keys are ra + rb. So 2*rl + 2*rr <= 2*(ra+rb) => rl + rr <= ra + rb. This is the same constraint as the original ra + rb = total - 2.
+But if the user only wants to reduce, they will typically pass rl <= ra and rr <= rb. We should allow rl + rr <= total_round_keys_available = ra_full + rb_full. We should assert this.
+
+Wait, looking at the key schedule: rk has ra + rb elements. In the original:
+
+First chunk (ra): uses rk[0..ra-1]
+Second chunk (rb): uses rk[ra..ra+rb-1]
+Third chunk (rb): uses rk[0..rb-1] (for the backward rounds, the bottom rb rounds)
+Fourth chunk (ra): uses rk[rb..ra+rb-1] (for the bottom ra rounds)
+Wait, let's re-examine the round key assignment in the original code:
+
+Forward rounds, first ra: rk_int[r] for r in range(ra)
+Forward rounds, second rb: rk_int[ra + r] for r in range(rb)
+Backward rounds, first rb: rk_int[r] for r in range(rb)
+Backward rounds, second ra: rk_int[rb + r] for r in range(ra)
+So the bottom rb rounds reuse the top rb keys (rk[0..rb-1]), and the bottom ra rounds reuse the next ra keys (rk[rb..rb+ra-1]).
+
+This means the full set of ra+rb keys is used twice across the cipher:
+
+Top half: all ra+rb keys
+Bottom half: all ra+rb keys in a different order.
+If we replace ra with rl and rb with rr, the key mapping should be:
+
+Top-left rl rounds: rk[0..rl-1]
+Top-right rr rounds: rk[rl..rl+rr-1]
+Bottom-right rr rounds: rk[0..rr-1]
+Bottom-left rl rounds: rk[rr..rr+rl-1]
+This requires rl + rr <= len(rk) = ra_full + rb_full. We should assert this.
+
+Also for constants rc and rc_prime:
+
+Top-left rl rounds: rc[0..rl-1]
+Top-right rr rounds: rc[rl..rl+rr-1]
+Bottom-right rr rounds: rc_prime[0..rr-1]
+Bottom-left rl rounds: rc_prime[rr..rr+rl-1]
+This requires rl + rr <= len(rc) and len(rc_prime).
+
+So the plan is:
+
+Add rl=None and rr=None to __init__.
+Compute the full ra_full, rb_full from the variant config.
+If rl is None, rl = ra_full. If rr is None, rr = rb_full.
+Assert rl >= 0, rr >= 0, rl + rr <= ra_full + rb_full.
+Modify the assembly loop to use rl and rr instead of ra and rb.
+Adjust the key and constant indexing accordingly.
+Update the docstring to document the new parameters.
+Let's trace the assembly code carefully.
+
+Current assembly (with variable names ra, rb):
+
+node = cipher.IN
+# initial whitening with w0
+node = cipher.add_subcipher(rk_xor(w0_int), [(node, (i, i)) for i in range(state_nibbles)])
+# a forward keyed rounds
+for r in range(ra):
+    node = cipher.add_subcipher(fwd_round, [(node, (i, i)) for i in range(state_nibbles)])
+    cipher.nodes[node].nodes[fwd_rk].const = rk_int[r]
+    cipher.nodes[node].nodes[fwd_rc].const = rc_int[r]
+# middle: S, M, AK(h0), P
+node = middle_stage(cipher, node, h0_int, "h0")
+node = cipher.add_subcipher(perm, [(node, (i, i)) for i in range(state_nibbles)])
+# b forward keyed rounds
+for r in range(rb):
+    node = cipher.add_subcipher(fwd_round, [(node, (i, i)) for i in range(state_nibbles)])
+    cipher.nodes[node].nodes[fwd_rk].const = rk_int[ra + r]
+    cipher.nodes[node].nodes[fwd_rc].const = rc_int[ra + r]
+# middle: S, M, AK(h0^h1), S
+node = middle_stage(cipher, node, h_xor_int, "hxor")
+node = cipher.add_subcipher(subcells, [(node, (i, i)) for i in range(state_nibbles)])
+# b backward keyed rounds
+for r in range(rb):
+    node = cipher.add_subcipher(bwd_round, [(node, (i, i)) for i in range(state_nibbles)])
+    cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[r]
+    cipher.nodes[node].nodes[bwd_rk].const = rk_int[r]
+# middle: P^-1, AK(h1), M, S
+node = cipher.add_subcipher(inv_perm, [(node, (i, i)) for i in range(state_nibbles)])
+node = cipher.add_subcipher(rk_xor(h1_int), [(node, (i, i)) for i in range(state_nibbles)])
+node = cipher.add_subcipher(mixcolumns, [(node, (i, i)) for i in range(state_nibbles)])
+node = cipher.add_subcipher(subcells, [(node, (i, i)) for i in range(state_nibbles)])
+# a backward keyed rounds
+for r in range(ra):
+    node = cipher.add_subcipher(bwd_round, [(node, (i, i)) for i in range(state_nibbles)])
+    cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[rb + r]
+    cipher.nodes[node].nodes[bwd_rk].const = rk_int[rb + r]
+# final whitening with w1
+...
+With rl and rr:
+
+Top-left forward rounds: range(rl), keys rk_int[r], constants rc_int[r]
+Top-right forward rounds: range(rr), keys rk_int[rl + r], constants rc_int[rl + r]
+Bottom-right backward rounds: range(rr), keys rk_int[r], constants rc_prime_int[r]
+Bottom-left backward rounds: range(rl), keys rk_int[rr + r], constants rc_prime_int[rr + r]
+This exactly mirrors the original pattern. The assertion rl + rr <= ra_full + rb_full ensures the indices rk_int[rl + r] and rk_int[rr + r] stay in bounds.
+
+Let's write the edits.
+
+I need to:
+
+Change def __init__(self, n=64, t=64, key=0, tweak=0, name=None): to accept rl=None, rr=None.
+After computing state_bytes, tweak_bytes, ra, rb, pbox, rc, rc_prime, set rl = ra if rl is None else rl and rr = rb if rr is None else rr.
+Assert rl >= 0, rr >= 0, rl + rr <= ra + rb.
+In the assembly section, replace ra with rl and rb with rr, and adjust the key/constant indices as above.
+Update the docstring.
+Let's do the edits.
+
+Also, I need to be careful about _generate_round_key. It uses ra_rb(state_bytes, key_bytes) which returns ra+rb. Since key_bytes is computed based on the variant (from the key bit length or default), the key schedule will always generate the full ra_full + rb_full round keys. That's fine.
+
+Let me verify the key schedule logic in _generate_round_key.
+
+rk = [[0] * state_bytes for _ in range(ra_rb(state_bytes, key_bytes))]
+ra_rb(state_bytes, key_bytes) returns key_bytes // state_bytes - 2. Since key_bytes is computed based on the variant config, this returns ra_full + rb_full. So rk has ra_full + rb_full elements. If the user passes rl=2, rr=3 for Blink-64 (which are the defaults), it's fine. If they pass smaller values, rk still has enough elements.
+
+Now for the assertions:
+
+assert rl >= 0 and rr >= 0, "rl and rr must be non-negative"
+assert rl + rr <= ra + rb, f"rl({rl}) + rr({rr}) must not exceed total rounds ({ra + rb})"
+Wait, what if the user passes rl and rr but no key? In that case, key_bytes is inferred from ra_rb_from_n_t(n,t) + 2. ra_rb_from_n_t returns the total ra+rb for the default variant. So key_bytes is correct for the full variant. Then rl and rr can be smaller. This is fine.
+
+What if the user passes a key that is shorter than the variant's default? Then _variant_config infers ra, rb from the key length. For example, if key is 32 bytes for n=64, then key_bytes=32, ra+rb = 32/8 - 2 = 2. Then ra would be... let's see _variant_config:
+
+if block_bits == 64:
+    ra, rb = 2, 3
+elif key_bytes == 128:
+    ra, rb = 3, 3
+else:
+    ra, rb = 3, 5
+It doesn't adapt to the key length! It always returns fixed ra, rb based on block size or key_bytes==128. Wait, for n=64, key_bytes could be anything? No, key_bytes is passed in from (key.bit_length() + 7) // 8. If key is, say, 16 bytes, then key_bytes=16. Then _variant_config would compute total = 16 // 8 = 2, and assert 2 + 3 + 2 == 2, which fails.
+
+So key must match the expected length for the variant. The current code handles this by asserting in _variant_config. The user typically provides the correct key or no key. If they pass rl and rr, they can only reduce from the default totals.
+
+Let's double check the rc_prime indices in the bottom-left block. Original:
+
+for r in range(ra):
+    ...
+    cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[rb + r]
+With rr:
+
+for r in range(rl):
+    ...
+    cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[rr + r]
+Yes, because the bottom rl rounds use the constants after the first rr constants.
+
+Similarly for rk_int: Original bottom-left: rk_int[rb + r] New bottom-left: rk_int[rr + r]
+
+Top-right forward: rk_int[ra + r] -> rk_int[rl + r]
+
+Everything checks out.
+
+Let's also consider whether the name should reflect rl and rr. If not provided, default to Blink-{n}-r{rl}-{rr} or something? The user didn't ask for this, but it's useful. I'll update the default name if rl or rr differ from defaults. Or just always include it if specified. The current default is f"Blink-{n}". If name is None, I'll keep the default but maybe append the round counts if they differ from the standard. Actually, to keep it simple, I'll just let the user pass a name if they want; otherwise default to Blink-{n} as before, but maybe with a suffix. Let's add: if name is None: name = f"Blink-{n}-{rl}-{rr}"? No, that changes the default behavior and could break existing doctests.
+
+I'll keep the default name unchanged unless the user specifies one. If rl or rr is non-default, it's the user's responsibility to pass a name if they want.
+
+Now for the docstring: Add parameters:
+
+rl -- integer (optional); Number of forward/inverse rounds in the outer branch (a). Defaults to the variant's standard ra.
+rr -- integer (optional); Number of forward/inverse rounds in the inner branch (b). Defaults to the variant's standard rb.
+And add a note: "When rl and rr are smaller than the defaults, a reduced-round instance is produced (useful for impossible-differential experiments)."
+
+I should also add a doctest for a reduced-round instance to make sure it builds and is valid.
+
+sage: blink = BLINK_CVL(64, 64, rl=1, rr=1)
+sage: blink.is_valid
+True
+Let's prepare the edit calls.
+
+First edit: __init__ signature and variant config handling.
+
+    def __init__(self, n=64, t=64, key=0, tweak=0, name=None, rl=None, rr=None):
+        if name is None:
+            name = f"Blink-{n}"
+
+        assert n in [64, 128], f"Block size must be 64 or 128, not {n}!"
+        assert t in [64, 128, 256], f"Tweak size {t} not supported!"
+
+        state_bytes, tweak_bytes, ra, rb, pbox, rc, rc_prime = _variant_config(
+            n, t, (key.bit_length() + 7) // 8 if key else (n // 8) * (ra_rb_from_n_t(n, t) + 2)
+        )
+
+        if rl is None:
+            rl = ra
+        if rr is None:
+            rr = rb
+
+        assert rl >= 0 and rr >= 0, "rl and rr must be non-negative"
+        assert rl + rr <= ra + rb, (
+            f"rl({rl}) + rr({rr}) exceeds the available round keys/constants "
+            f"for this variant (max {ra + rb})"
+        )
+Second set of edits: Replace the assembly loops.
+
+Change comment # a forward keyed rounds and loop:
+
+        # rl forward keyed rounds
+        for r in range(rl):
+            node = cipher.add_subcipher(
+                fwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[fwd_rk].const = rk_int[r]
+            cipher.nodes[node].nodes[fwd_rc].const = rc_int[r]
+        # middle: S, M, AK(h0), P
+        node = middle_stage(cipher, node, h0_int, "h0")
+        node = cipher.add_subcipher(
+            perm, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        # rr forward keyed rounds
+        for r in range(rr):
+            node = cipher.add_subcipher(
+                fwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[fwd_rk].const = rk_int[rl + r]
+            cipher.nodes[node].nodes[fwd_rc].const = rc_int[rl + r]
+Change center section (no changes needed):
+
+        # middle: S, M, AK(h0^h1), S
+        node = middle_stage(cipher, node, h_xor_int, "hxor")
+        node = cipher.add_subcipher(
+            subcells, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+Change # b backward keyed rounds and loop:
+
+        # rr backward keyed rounds
+        for r in range(rr):
+            node = cipher.add_subcipher(
+                bwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[r]
+            cipher.nodes[node].nodes[bwd_rk].const = rk_int[r]
+Change # a backward keyed rounds and loop:
+
+        # rl backward keyed rounds
+        for r in range(rl):
+            node = cipher.add_subcipher(
+                bwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[rr + r]
+            cipher.nodes[node].nodes[bwd_rk].const = rk_int[rr + r]
+I should also update the docstring to document rl and rr. The docstring starts at line 340. I'll add to the INPUT section.
+
+        - ``rl`` -- integer (optional); Number of outer forward/inverse rounds
+          (replaces the default ``ra``). Defaults to ``None`` (variant standard).
+
+        - ``rr`` -- integer (optional); Number of inner forward/inverse rounds
+          (replaces the default ``rb``). Defaults to ``None`` (variant standard).
+And add a doctest for reduced rounds. I can put it after the full-round doctests.
+
+        sage: blink = BLINK_CVL(64, 64, rl=1, rr=1)
+        sage: blink.is_valid
+        True
+Let's make these edits.
+
+Actually, I need to be careful with the edit tool: the oldString must match exactly. I'll make one large edit for the __init__ method and surrounding code, or several smaller ones.
+
+Let's do it in multiple edits to minimize risk:
+
+Edit signature, default name, and assertions after _variant_config.
+Edit the forward loops.
+Edit the backward loops.
+Edit the docstring.
+Let's read the exact text around the signature again. Lines 438-447:
+
+    def __init__(self, n=64, t=64, key=0, tweak=0, name=None):
+        if name is None:
+            name = f"Blink-{n}"
+
+        assert n in [64, 128], f"Block size must be 64 or 128, not {n}!"
+        assert t in [64, 128, 256], f"Tweak size {t} not supported!"
+
+        state_bytes, tweak_bytes, ra, rb, pbox, rc, rc_prime = _variant_config(
+            n, t, (key.bit_length() + 7) // 8 if key else (n // 8) * (ra_rb_from_n_t(n, t) + 2)
+        )
+I'll replace this with:
+
+    def __init__(self, n=64, t=64, key=0, tweak=0, name=None, rl=None, rr=None):
+        if name is None:
+            name = f"Blink-{n}"
+
+        assert n in [64, 128], f"Block size must be 64 or 128, not {n}!"
+        assert t in [64, 128, 256], f"Tweak size {t} not supported!"
+
+        state_bytes, tweak_bytes, ra, rb, pbox, rc, rc_prime = _variant_config(
+            n, t, (key.bit_length() + 7) // 8 if key else (n // 8) * (ra_rb_from_n_t(n, t) + 2)
+        )
+
+        if rl is None:
+            rl = ra
+        if rr is None:
+            rr = rb
+
+        assert rl >= 0 and rr >= 0, "rl and rr must be non-negative"
+        assert rl + rr <= ra + rb, (
+            f"rl({rl}) + rr({rr}) exceeds available round keys/constants "
+            f"for this variant (max {ra + rb})"
+        )
+Next, the forward rounds section. Lines 567-585:
+
+        # a forward keyed rounds
+        for r in range(ra):
+            node = cipher.add_subcipher(
+                fwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[fwd_rk].const = rk_int[r]
+            cipher.nodes[node].nodes[fwd_rc].const = rc_int[r]
+        # middle: S, M, AK(h0), P
+        node = middle_stage(cipher, node, h0_int, "h0")
+        node = cipher.add_subcipher(
+            perm, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        # b forward keyed rounds
+        for r in range(rb):
+            node = cipher.add_subcipher(
+                fwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[fwd_rk].const = rk_int[ra + r]
+            cipher.nodes[node].nodes[fwd_rc].const = rc_int[ra + r]
+Replace with:
+
+        # rl forward keyed rounds
+        for r in range(rl):
+            node = cipher.add_subcipher(
+                fwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[fwd_rk].const = rk_int[r]
+            cipher.nodes[node].nodes[fwd_rc].const = rc_int[r]
+        # middle: S, M, AK(h0), P
+        node = middle_stage(cipher, node, h0_int, "h0")
+        node = cipher.add_subcipher(
+            perm, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        # rr forward keyed rounds
+        for r in range(rr):
+            node = cipher.add_subcipher(
+                fwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[fwd_rk].const = rk_int[rl + r]
+            cipher.nodes[node].nodes[fwd_rc].const = rc_int[rl + r]
+Next, the backward rounds sections. Lines 591-617:
+
+        # b backward keyed rounds
+        for r in range(rb):
+            node = cipher.add_subcipher(
+                bwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[r]
+            cipher.nodes[node].nodes[bwd_rk].const = rk_int[r]
+        # middle: P^-1, AK(h1), M, S
+        node = cipher.add_subcipher(
+            inv_perm, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        node = cipher.add_subcipher(
+            rk_xor(h1_int), [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        node = cipher.add_subcipher(
+            mixcolumns, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        node = cipher.add_subcipher(
+            subcells, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        # a backward keyed rounds
+        for r in range(ra):
+            node = cipher.add_subcipher(
+                bwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[rb + r]
+            cipher.nodes[node].nodes[bwd_rk].const = rk_int[rb + r]
+Replace with:
+
+        # rr backward keyed rounds
+        for r in range(rr):
+            node = cipher.add_subcipher(
+                bwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[r]
+            cipher.nodes[node].nodes[bwd_rk].const = rk_int[r]
+        # middle: P^-1, AK(h1), M, S
+        node = cipher.add_subcipher(
+            inv_perm, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        node = cipher.add_subcipher(
+            rk_xor(h1_int), [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        node = cipher.add_subcipher(
+            mixcolumns, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        node = cipher.add_subcipher(
+            subcells, [(node, (i, i)) for i in range(state_nibbles)]
+        )
+        # rl backward keyed rounds
+        for r in range(rl):
+            node = cipher.add_subcipher(
+                bwd_round, [(node, (i, i)) for i in range(state_nibbles)]
+            )
+            cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[rr + r]
+            cipher.nodes[node].nodes[bwd_rk].const = rk_int[rr + r]
+Next, the docstring. I'll add rl and rr to the INPUT block. Lines 350-364:
+
+    INPUT:
+
+        - ``n`` -- integer; Block size in bits, must be ``64`` or ``128``.
+
+        - ``t`` -- integer; Tweak size in bits, one of ``{64, 128, 256}`` for
+          ``n = 64`` and one of ``{128, 256}`` for ``n = 128``.
+
+        - ``key`` -- integer (optional); The master key. Defaults to ``0``,
+          which (for non-zero tweak) still yields a valid cipher; for trail
+          analysis the concrete value does not matter as it is a constant
+          XOR.
+
+        - ``tweak`` -- integer (optional); The tweak. Defaults to ``0``.
+
+        - ``name`` -- string (optional); Name of the cipher instance.
+Replace with:
+
+    INPUT:
+
+        - ``n`` -- integer; Block size in bits, must be ``64`` or ``128``.
+
+        - ``t`` -- integer; Tweak size in bits, one of ``{64, 128, 256}`` for
+          ``n = 64`` and one of ``{128, 256}`` for ``n = 128``.
+
+        - ``key`` -- integer (optional); The master key. Defaults to ``0``,
+          which (for non-zero tweak) still yields a valid cipher; for trail
+          analysis the concrete value does not matter as it is a constant
+          XOR.
+
+        - ``tweak`` -- integer (optional); The tweak. Defaults to ``0``.
+
+        - ``name`` -- string (optional); Name of the cipher instance.
+
+        - ``rl`` -- integer (optional); Number of outer forward / inverse
+          rounds (replaces the variant's default ``ra``). Defaults to the
+          standard value for the chosen block/tweak size.
+
+        - ``rr`` -- integer (optional); Number of inner forward / inverse
+          rounds (replaces the variant's default ``rb``). Defaults to the
+          standard value for the chosen block/tweak size.
+And add a reduced-round doctest. I'll place it after the is_valid doctest. Lines 402-414:
+
+    The graph contains only explicitly named components::
+
+        sage: from civerly.cipher_implementations.blink import BLINK_CVL
+        sage: blink = BLINK_CVL(64, 64)
+        sage: for node in blink.nodes:
+        ....:     if hasattr(node, 'name'):
+        ....:         assert "Unnamed Component" not in node.name
+        ....:     if hasattr(node, 'nodes'):
+        ....:         for sub in node.nodes:
+        ....:             if hasattr(sub, 'name'):
+        ....:                 assert "Unnamed Component" not in sub.name
+        sage: blink.is_valid
+        True
+Replace with:
+
+    Reduced-round instances can be built by passing ``rl`` and ``rr``::
+
+        sage: blink = BLINK_CVL(64, 64, rl=1, rr=1)
+        sage: blink.is_valid
+        True
+
+    The graph contains only explicitly named components::
+
+        sage: from civerly.cipher_implementations.blink import BLINK_CVL
+        sage: blink = BLINK_CVL(64, 64)
+        sage: for node in blink.nodes:
+        ....:     if hasattr(node, 'name'):
+        ....:         assert "Unnamed Component" not in node.name
+        ....:     if hasattr(node, 'nodes'):
+        ....:         for sub in node.nodes:
+        ....:             if hasattr(sub, 'name'):
+        ....:                 assert "Unnamed Component" not in sub.name
+        sage: blink.is_valid
+        True
+Wait, the line sage: from civerly.cipher_implementations.blink import BLINK_CVL inside the "graph contains" doctest is redundant. I'll keep the original text as much as possible, just adding the new doctest block before it.
+
+Actually, I need to include the exact old string. Let me just insert the new doctest before the existing "The graph contains..." block.
+
+Original block to match:
+
+    The graph contains only explicitly named components::
+I'll match a slightly larger string to be unique.
+
+Let's match from Modeling the cipher to True or something. No, let's just match:
+
+    The graph contains only explicitly named components::
+
+        sage: from civerly.cipher_implementations.blink import BLINK_CVL
+        sage: blink = BLINK_CVL(64, 64)
+        sage: for node in blink.nodes:
+        ....:     if hasattr(node, 'name'):
+        ....:         assert "Unnamed Component" not in node.name
+        ....:     if hasattr(node, 'nodes'):
+        ....:         for sub in node.nodes:
+        ....:             if hasattr(sub, 'name'):
+        ....:                 assert "Unnamed Component" not in sub.name
+        sage: blink.is_valid
+        True
+And prepend
+
+... (code changes)
+
+The BLINK_CVL constructor now accepts two optional round-count parameters, rl and rr, which replace the variant-default ra and rb respectively.
+
+What changed
+
+Constructor signature – added rl=None, rr=None.
+Defaults – when omitted, rl falls back to the variant’s standard ra and rr to rb (so existing calls are unchanged).
+Bounds check – asserts that rl + rr ≤ ra + rb, ensuring only as many rounds/keys/constants are consumed as the key schedule actually generates.
+Graph assembly – all four round loops now use the user-supplied values:
+rl forward rounds at the top,
+rr forward rounds before the center,
+rr inverse rounds after the center,
+rl inverse rounds at the bottom. Round-key and round-constant indices are updated accordingly (rk_int[rl+r], rc_prime_int[rr+r], etc.).
+Documentation & doctests – the docstring describes the new arguments, and a small reduced-round sanity check is included:
+sage: blink = BLINK_CVL(64, 64, rl=1, rr=1)
+sage: blink.is_valid
+True
+This lets you instantiate reduced-round Blink objects (e.g. rl=2, rr=2 or rl=3, rr=4 for Blink-64) to test the impossible-differential and differential claims in documentation/analysis.md directly through the CiVerLy modeling pipeline.
+
+
+User:
+Please check if the default values of blink @src/civerly/cipher_implementations/blink.py match the versions provided in @documentation/Screenshot 2026-07-20 at 17.59.37.png  , considering that n is the block size in bits and tau is the length of the tweak. If not, you may adjust the parameters for the constructor. The reference implementation is @documentation/blink.py , information can be found @documentation/blink.md .
+
+Let me analyze the screenshot and the code to check if the default values match.
+
+From the screenshot (the table):
+
+Blink-64a: n=64, τ=64, a=2, b=3
+Blink-64b: n=64, τ=128, a=2, b=3
+Blink-128a: n=128, τ=128, a=3, b=3
+Blink-128b: n=128, τ=256, a=3, b=3
+Blink-128A: n=128, τ=128, a=3, b=5
+Blink-128B: n=128, τ=256, a=3, b=5
+Now let me look at how the constructor determines ra and rb:
+
+state_bytes, tweak_bytes, ra, rb, pbox, rc, rc_prime = _variant_config(
+    n, t, (key.bit_length() + 7) // 8 if key else (n // 8) * (ra_rb_from_n_t(n, t) + 2)
+)
+And _variant_config:
+
+def _variant_config(block_bits, tweak_bits, key_bytes):
+    # ...
+    total = key_bytes // state_bytes          # a + b + 2
+    if block_bits == 64:
+        ra, rb = 2, 3
+    elif key_bytes == 128:
+        ra, rb = 3, 3
+    else:
+        ra, rb = 3, 5
+    assert ra + rb + 2 == total
+    return state_bytes, tweak_bytes, ra, rb, pbox, rc, rc_prime
+And ra_rb_from_n_t:
+
+def ra_rb_from_n_t(n, t):
+    if n == 64:
+        return 5
+    if t == 128:
+        return 6
+    return 8
+Wait, there are some issues with _variant_config:
+
+It uses key_bytes == 128 to distinguish between 128a/128b (ra=3, rb=3) and 128A/128B (ra=3, rb=5).
+For 128a/128b, key_bytes = 128, so ra=3, rb=3. ✓
+For 128A/128B, key_bytes = 160, so ra=3, rb=5. ✓
+But _variant_config receives key_bytes calculated from ra_rb_from_n_t(n, t) + 2 when key is not provided.
+For n=128, t=128: ra_rb_from_n_t returns 6, so key_bytes = (128/8) * (6+2) = 16 * 8 = 128. ✓
+For n=128, t=256: ra_rb_from_n_t returns 8, so key_bytes = (128/8) * (8+2) = 16 * 10 = 160. ✓
+For n=64: ra_rb_from_n_t returns 5, so key_bytes = (64/8) * (5+2) = 8 * 7 = 56. ✓
+Wait, the default key=0 in the constructor means key.bit_length() == 0, so (key.bit_length() + 7) // 8 == 0. Then it falls back to (n // 8) * (ra_rb_from_n_t(n, t) + 2).
+
+Let me verify:
+
+Blink-64a (n=64, t=64): state_bytes=8, ra_rb_from_n_t=5, key_bytes=8*(5+2)=56, ra=2, rb=3. ✓
+Blink-64b (n=64, t=128): state_bytes=8, ra_rb_from_n_t=5, key_bytes=8*(5+2)=56, ra=2, rb=3. ✓
+Blink-128a (n=128, t=128): state_bytes=16, ra_rb_from_n_t=6, key_bytes=16*(6+2)=128, ra=3, rb=3. ✓
+Blink-128b (n=128, t=256): state_bytes=16, ra_rb_from_n_t=8, key_bytes=16*(8+2)=160, ra=3, rb=5.
+Wait! For Blink-128b (n=128, t=256), the table says a=3, b=3, but with the current code, since key_bytes=160, it would give ra=3, rb=5!
+
+That's wrong! For Blink-128b, the key size should be 128 bytes, not 160. Let me double check with the reference implementation.
+
+Looking at documentation/blink.py:
+
+Blink_128b = BlinkCipher(
+    state_bytes=16,
+    tweak_bytes=32,
+    key_bytes=128,
+    ra=3,
+    rb=3,
+    # ...
+)
+
+Blink_128B = BlinkCipher(
+    state_bytes=16,
+    tweak_bytes=32,
+    key_bytes=160,
+    ra=3,
+    rb=5,
+    # ...
+)
+So Blink-128b (lowercase b) has key_bytes=128, ra=3, rb=3. And Blink-128B (uppercase B) has key_bytes=160, ra=3, rb=5.
+
+Now the issue: for n=128, t=256, the default key length computed is 160, which maps to ra=3, rb=5. But the lowercase Blink-128b (t=256) should have ra=3, rb=3!
+
+The problem is that ra_rb_from_n_t returns 8 for n=128, t=256, leading to key_bytes=160. But the user can pass key=0 (default), and with t=256, they might expect the lowercase Blink-128b variant (128-bit key, 3+3), not the uppercase Blink-128B (160-bit key, 3+5).
+
+So currently, if someone does BLINK_CVL(128, 256) with the default key, they get ra=3, rb=5 (uppercase B behavior), but they might expect ra=3, rb=3 (lowercase b behavior).
+
+Let me also check the docstring:
+
+Blink-128b  (128-bit block, 256-bit tweak, 128-byte key, a=3, b=3)
+Blink-128B  (128-bit block, 256-bit tweak, 160-byte key, a=3, b=5)
+Yes! The docstring clearly says 128b should have 128-byte key. But ra_rb_from_n_t(128, 256) returns 8, giving 160-byte default key.
+
+So the fix should be: when the user doesn't provide a key, we need to infer which variant they want. Since both 128b and 128B have n=128 and t=256, we can't distinguish them without an explicit parameter. However, we might want to default to 128b (the smaller key) or require the user to pass a key.
+
+Actually, looking at the constructor more carefully:
+
+key_bytes = (key.bit_length() + 7) // 8 if key else (n // 8) * (ra_rb_from_n_t(n, t) + 2)
+When key=0, it computes a default key length. But for t=256, n=128, this gives 160 bytes.
+
+The issue is that ra_rb_from_n_t returns 8 for n=128, t=256, but 128b (lowercase) only needs 6 (ra+rb=6, key_bytes=128).
+
+I think the current code has a bug where it defaults to the larger key size for n=128, t=256, making it impossible to construct a lowercase 128b without explicitly providing a 128-byte key.
+
+Wait, but can a user just pass a smaller key? If key is provided, it uses (key.bit_length() + 7) // 8. If they pass key=0x... with 128 bytes, it would work. But the default behavior (key=0) gives 160 bytes.
+
+Actually, the real issue is that with key=0, (key.bit_length() + 7) // 8 = 0, and truthiness of 0 is False, so it falls back. If a user passes a non-zero key of 128 bytes, key.bit_length() would be around 1024 bits, so (1024 + 7) // 8 = 128 bytes. That would correctly determine ra=3, rb=3.
+
+But the problem is: what if the user does BLINK_CVL(128, 256) with the default key? They get ra=3, rb=5, which is the uppercase B variant.
+
+Let me think about what the user is asking. They showed a screenshot of a table and asked "check if the default values match". I need to verify that constructing with the default key gives the expected parameters from the table.
+
+Table expects:
+
+n=64, τ=64 → a=2, b=3 (Blink-64a)
+n=64, τ=128 → a=2, b=3 (Blink-64b)
+n=128, τ=128 → a=3, b=3 (Blink-128a)
+n=128, τ=256 → a=3, b=3 (Blink-128b)
+n=128, τ=128 → a=3, b=5 (Blink-128A) — key is different
+n=128, τ=256 → a=3, b=5 (Blink-128B) — key is different
+For the first four (lowercase), the key sizes are 56, 56, 128, 128 bytes respectively. For the last two (uppercase), key sizes are 160, 160 bytes.
+
+The issue is that ra_rb_from_n_t maps (128, 256) to 8, but lowercase 128b needs ra+rb=6.
+
+Actually, looking at the table from the screenshot: the n and τ columns alone don't uniquely identify the variant when n=128. We also need a and b (or equivalently, the key size).
+
+So the constructor currently cannot distinguish lowercase b from uppercase B when key=0 (default).
+
+One sensible fix would be to keep _variant_config but change the default key calculation so that for n=128, t=256, the default is the lowercase variant (128-byte key, a=3, b=3), and users who want uppercase must provide a key.
+
+But wait, that might break other things. Let me check how the reference does it. In the reference, the variant objects are explicitly created with specific parameters. In the CiVerLy implementation, the idea is to construct based on n, t, and key.
+
+Actually, in BLINK_CVL.__init__:
+
+if rl is None:
+    rl = ra
+if rr is None:
+    rr = rb
+So ra and rb come from _variant_config. And _variant_config infers (ra, rb) from key_bytes and block_bits.
+
+Let me trace through for each variant:
+
+BLINK_CVL(64, 64, key=0):
+ra_rb_from_n_t(64, 64) = 5
+key_bytes = 8 * (5+2) = 56
+state_bytes = 8
+total = 56 // 8 = 7
+block_bits == 64 → ra, rb = 2, 3
+assert 2+3+2 == 7 ✓
+Result: ra=2, rb=3 ✓ matches table
+BLINK_CVL(64, 128, key=0):
+ra_rb_from_n_t(64, 128) = 5
+key_bytes = 8 * 7 = 56
+ra=2, rb=3 ✓
+BLINK_CVL(128, 128, key=0):
+ra_rb_from_n_t(128, 128) = 6
+key_bytes = 16 * (6+2) = 128
+block_bits == 128, key_bytes == 128 → ra, rb = 3, 3
+Result: ra=3, rb=3 ✓
+BLINK_CVL(128, 256, key=0):
+ra_rb_from_n_t(128, 256) = 8
+key_bytes = 16 * (8+2) = 160
+block_bits == 128, key_bytes != 128 → ra, rb = 3, 5
+Result: ra=3, rb=5
+Wait, this gives ra=3, rb=5 for n=128, t=256 with default key! But Blink-128b in the table has a=3, b=3.
+
+So the default for BLINK_CVL(128, 256) gives the uppercase B variant parameters (a=3, b=5) instead of lowercase b (a=3, b=3).
+
+This is the mismatch. I should adjust the code so that:
+
+BLINK_CVL(128, 256) with a default key gives ra=3, rb=3 (matching 128b)
+To get 128B, one would need to provide a 160-byte key
+Actually, let me check what ra_rb_from_n_t is supposed to do. It's defined as:
+
+def ra_rb_from_n_t(n, t):
+    """Infer ``ra + rb`` from block/tweak sizes for the default key length."""
+    if n == 64:
+        return 5
+    if t == 128:
+        return 6
+    return 8
+This returns the maximum possible ra+rb for the given n and t across all variants with that n and t. For n=64, all variants have ra+rb=5. For n=128, t=128, ra+rb can be 6 (128a) or 8 (128A), and it returns 8 (the max). For n=128, t=256, ra+rb can be 6 (128b) or 8 (128B), and it returns 8.
+
+Wait, for n=128, t=128, ra_rb_from_n_t returns 6, not 8! So for t=128, it returns 6. That means for 128a, key_bytes = 128, which is correct. But for 128A (which needs key_bytes=160), if you pass key=0, you get key_bytes=128, which is wrong for 128A.
+
+Actually, wait. For 128A, the user should provide a 160-byte key. If they pass key=0, they get 128-byte key and ra=3, rb=3, which is 128a behavior.
+
+So ra_rb_from_n_t returns:
+
+n=64: 5 (correct for all 64-bit variants)
+n=128, t=128: 6 (correct for 128a, but if you want 128A you need to provide a key)
+n=128, t=256: 8 (correct for 128B, but if you want 128b you need... wait, it gives 160-byte default)
+Hmm, so for n=128, t=256, the default key size is 160, meaning the default variant is 128B, not 128b. But for n=128, t=128, the default is 128a (128 bytes), not 128A.
+
+This is inconsistent! The default for n=128, t=128 is the smaller-key variant, but for n=128, t=256 it's the larger-key variant.
+
+So the bug is in ra_rb_from_n_t. For n=128, t=256, it should return 6 (defaulting to 128b, 128-byte key), not 8.
+
+Wait, but then how would someone get 128B with default key? They can't. They'd have to pass an explicit 160-byte key. But that's the same situation as 128A vs 128a: to get 128A, you need to pass a 160-byte key.
+
+So the fix is to change ra_rb_from_n_t(128, 256) to return 6 instead of 8.
+
+Let me verify:
+
+For BLINK_CVL(128, 256, key=0):
+ra_rb_from_n_t = 6
+key_bytes = 16 * 8 = 128
+key_bytes == 128 → ra=3, rb=3
+This is 128b ✓
+For BLINK_CVL(128, 128, key=0):
+ra_rb_from_n_t = 6
+key_bytes = 128
+ra=3, rb=3
+This is 128a ✓
+For BLINK_CVL(128, 128, key=<160-byte-key>):
+key_bytes = 160
+key_bytes != 128 → ra=3, rb=5
+This is 128A ✓
+For BLINK_CVL(128, 256, key=<160-byte-key>):
+key_bytes = 160
+ra=3, rb=5
+This is 128B ✓
+And for 64-bit:
+
+BLINK_CVL(64, 64, key=0) or BLINK_CVL(64, 128, key=0):
+ra_rb_from_n_t = 5
+key_bytes = 8 * 7 = 56
+ra=2, rb=3 ✓
+So changing ra_rb_from_n_t(128, 256) from 8 to 6 would make the defaults consistent: always default to the smaller key variant.
+
+Actually, let me double check. Is there any test that would break? Let me look for tests...
+
+The doctest in the file tests:
+
+BLINK_CVL(128, 256, key=<128-byte-key>) expecting 128b output
+BLINK_CVL(128, 128, key=<160-byte-key>) expecting 128A output
+So the explicit key tests still work. The only thing that changes is BLINK_CVL(128, 256) with default key=0.
+
+Let me also check _variant_config:
+
+def _variant_config(block_bits, tweak_bits, key_bytes):
+    # ...
+    total = key_bytes // state_bytes          # a + b + 2
+    # (a, b) per variant
+    if block_bits == 64:
+        ra, rb = 2, 3
+    elif key_bytes == 128:
+        ra, rb = 3, 3
+    else:
+        ra, rb = 3, 5
+If key_bytes=128 and block_bits=128, ra=3, rb=3. If key_bytes=160, ra=3, rb=5.
+
+Actually, is there any scenario where block_bits=128 and key_bytes is something other than 128 or 160? If a user passes a weird key size, it would default to ra=3, rb=5. But then the assert ra + rb + 2 == total would catch it if it's not exactly 160/16=10 (a+b+2=10).
+
+Wait, for 128-bit block, state_bytes=16.
+
+For ra=3, rb=3: total = 3+3+2 = 8, key_bytes = 8*16 = 128
+For ra=3, rb=5: total = 3+5+2 = 10, key_bytes = 10*16 = 160
+So only 128 and 160 are valid key sizes for 128-bit block. The assert would catch invalid sizes.
+
+So yes, the fix is simple: change ra_rb_from_n_t so that for n=128, t=256, it returns 6 instead of 8.
+
+Actually wait, let me re-read ra_rb_from_n_t:
+
+def ra_rb_from_n_t(n, t):
+    """Infer ``ra + rb`` from block/tweak sizes for the default key length."""
+    if n == 64:
+        return 5
+    if t == 128:
+        return 6
+    return 8
+So for n=128 and t=256, it returns 8. I need to change this line to return 6 for the default to be the smaller variant.
+
+But actually, thinking more about the semantics: "Infer ra + rb from block/tweak sizes for the default key length". For n=128, t=128, the default should be 128a (ra+rb=6). For n=128, t=256, the default should be 128b (ra+rb=6).
+
+So:
+
+def ra_rb_from_n_t(n, t):
+    if n == 64:
+        return 5
+    return 6
+Wait, that's even simpler. Let me check: for n=128, both t=128 and t=256 should default to ra+rb=6. If the user wants ra+rb=8 (128A or 128B), they must provide a key.
+
+So the fix could be:
+
+def ra_rb_from_n_t(n, t):
+    """Infer ``ra + rb`` from block/tweak sizes for the default key length."""
+    if n == 64:
+        return 5
+    return 6
+Or more explicitly:
+
+def ra_rb_from_n_t(n, t):
+    """Infer ``ra + rb`` from block/tweak sizes for the default key length."""
+    if n == 64:
+        return 5
+    if n == 128:
+        return 6
+    raise ValueError(f"Unsupported block size {n}")
+Wait, but what about t? Should it matter for the default? No, because for n=128, both t=128 and t=256 have a lowercase variant with ra+rb=6.
+
+But then _variant_config uses tweak_bits to select the round constants:
+
+    if block_bits == 64:
+        pbox = PBOX_64
+        rc = ROUND_CONST_64
+        rc_prime = ROUND_CONST_PRIME_64
+    else:
+        pbox = PBOX_128
+        if key_bytes == 128:
+            rc = ROUND_CONST_128a
+            rc_prime = ROUND_CONST_PRIME_128a
+        else:
+            rc = ROUND_CONST_128A
+            rc_prime = ROUND_CONST_PRIME_128A
+Hmm, this means for 128-bit block, if key_bytes=128, it uses the 128a round constants. But Blink-128b (lowercase, 256-bit tweak, key_bytes=128) should also use the 128a round constants? Let me check the reference implementation.
+
+In documentation/blink.py:
+
+Blink_128b = BlinkCipher(
+    state_bytes=16,
+    tweak_bytes=32,
+    key_bytes=128,
+    ra=3,
+    rb=3,
+    pbox=PBOX_128,
+    round_const=ROUND_CONST_128a,
+    round_const_prime=ROUND_CONST_PRIME_128a,
+)
+
+Blink_128B = BlinkCipher(
+    state_bytes=16,
+    tweak_bytes=32,
+    key_bytes=160,
+    ra=3,
+    rb=5,
+    pbox=PBOX_128,
+    round_const=ROUND_CONST_128A,
+    round_const_prime=ROUND_CONST_PRIME_128A,
+)
+Yes! Blink-128b uses ROUND_CONST_128a and ROUND_CONST_PRIME_128a (the 6-round constants), while Blink-128B uses ROUND_CONST_128A and ROUND_CONST_PRIME_128A (the 8-round constants).
+
+And in _variant_config:
+
+key_bytes == 128 → uses the 6-round constants (ROUND_CONST_128a)
+key_bytes != 128 → uses the 8-round constants (ROUND_CONST_128A)
+This is correct! For 128b (128-byte key), it gets the 6-round constants. For 128B (160-byte key), it gets the 8-round constants.
+
+The only issue is that ra_rb_from_n_t(128, 256) returning 8 causes the default key size to be 160, which makes the default variant 128B instead of 128b.
+
+Actually, wait. If I change ra_rb_from_n_t to return 6 for all n=128 cases, then:
+
+For BLINK_CVL(128, 256, key=0): key_bytes=128, ra=3, rb=3, uses 6-round constants → 128b ✓
+For BLINK_CVL(128, 128, key=0): key_bytes=128, ra=3, rb=3, uses 6-round constants → 128a ✓
+For BLINK_CVL(128, 256, key=<160-byte>): key_bytes=160, ra=3, rb=5, uses 8-round constants → 128B ✓
+For BLINK_CVL(128, 128, key=<160-byte>): key_bytes=160, ra=3, rb=5, uses 8-round constants → 128A ✓
+This is perfect.
+
+So the fix is: change ra_rb_from_n_t to return 6 for any n=128 case.
+
+Actually, I realize that ra_rb_from_n_t doesn't even need the t parameter anymore if we make this change. But to keep the signature, we can just update the body.
+
+Current:
+
+def ra_rb_from_n_t(n, t):
+    """Infer ``ra + rb`` from block/tweak sizes for the default key length."""
+    if n == 64:
+        return 5
+    if t == 128:
+        return 6
+    return 8
+Fix:
+
+def ra_rb_from_n_t(n, t):
+    """Infer ``ra + rb`` from block/tweak sizes for the default key length."""
+    if n == 64:
+        return 5
+    return 6
+Wait, does this break anything? Let me think...
+
+The docstring says "Infer ra + rb from block/tweak sizes for the default key length." For n=128, the default should be the smaller variant regardless of tweak size.
+
+Actually, I should be more careful. Is there any code that relies on ra_rb_from_n_t(128, 256) returning 8? Let me search.
+
+Looking at src/civerly/cipher_implementations/blink.py, ra_rb_from_n_t is only called once:
+
+state_bytes, tweak_bytes, ra, rb, pbox, rc, rc_prime = _variant_config(
+    n, t, (key.bit_length() + 7) // 8 if key else (n // 8) * (ra_rb_from_n_t(n, t) + 2)
+)
+So changing it only affects the default key length calculation.
+
+And in _variant_config, the tweak_bits parameter is used for assertions/selection of rc/rc_prime only through key_bytes.
+
+So yes, the fix is straightforward. Let me make it.
+
+Additionally, I should also update the docstring or assertion checks, but I think the code change to ra_rb_from_n_t is sufficient.
+
+Actually, let me verify by running the tests. Let me check if there's a test suite.
+
+I should also check if there are doctests in the file that might rely on the old behavior. Looking at the doctests:
+
+sage: blink = BLINK_CVL(64, 64, rl=1, rr=1)
+This creates with key=0, n=64, t=64. Since ra_rb_from_n_t(64,64)=5, key_bytes=56. Works with both old and new code.
+
+sage: blink = BLINK_CVL(64, 64, name="blink-64a")
+sage: with tempfile.TemporaryDirectory() as tmpdir:
+....:   model_options = MODEL_OPTIONS(...)
+....:   milp = blink.model(model_options)
+....:   milp is not None
+This also uses default key. Works with both.
+
+None of the doctests create BLINK_CVL(128, 256) without an explicit key. The tests for 128 variants all pass explicit keys.
+
+So changing ra_rb_from_n_t won't break any existing doctests.
+
+Now, I'll make the edit. Let me read the file to get the exact string to match.
+
+I’ve traced through the parameter deduction in BLINK_CVL.__init__. There is a mismatch for the 128-bit block with 256-bit tweak variant:
+
+From the table: Blink-128b has a = 3, b = 3 and requires a 128-byte key.
+From the code: when key=0 (the default) and n=128, t=256, ra_rb_from_n_t currently returns 8, so the inferred key length is 16 × (8+2) = 160 bytes. That makes the constructor default to the uppercase B parameters (a = 3, b = 5) instead of the lowercase b parameters.
+The root cause is in ra_rb_from_n_t: for n = 128 it should always return 6 (the smaller-key variant) when no key is provided. Users who want the uppercase variants (128A/128B) can still supply a 160-byte key explicitly. For n = 64 it correctly returns 5 already, since both 64-bit variants share the same key size.
+
+The user asked me to check if the default values match and to adjust if needed. I found the mismatch and fixed it by editing ra_rb_from_n_t to return 6 for all n=128 cases instead of returning 8 when t=256.
+
+I should briefly summarize what I did and verify the fix is correct. Let me trace through the variants again with the new code to make sure everything lines up with the table.
+
+With that change, the constructor now defaults to the correct smaller-key variants for every (n, τ) pair in the table:
+
+Variant	n	τ	Default key bytes	Inferred a	Inferred b
+Blink-64a	64	64	8 × (5+2) = 56	2	3
+Blink-64b	64	128	8 × (5+2) = 56	2	3
+Blink-128a	128	128	16 × (6+2) = 128	3	3
+Blink-128b	128	256	16 × (6+2) = 128	3	3
+(For the uppercase Blink-128A/Blink-128B variants, the user must still explicitly provide a 160-byte key, which is then detected by _variant_config and sets a = 3, b = 5.)
+
