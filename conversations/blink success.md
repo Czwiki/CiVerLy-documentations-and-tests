@@ -3935,3 +3935,816 @@ Blink-128a	128	128	16 × (6+2) = 128	3	3
 Blink-128b	128	256	16 × (6+2) = 128	3	3
 (For the uppercase Blink-128A/Blink-128B variants, the user must still explicitly provide a 160-byte key, which is then detected by _variant_config and sets a = 3, b = 5.)
 
+User:
+I realized that I need to be able to slice the construction of blink @src/civerly/cipher_implementations/blink.py  even more. If you look at @documentation/Weak Tweak Key.md and @documentation/Screenshot 2026-07-21 at 17.57.52.png , you can see an attack and differential characteristics between the rounds. They are counted by the number of S-Boxes the construction inhabits. The 10 round attack does not start with the first, but the second round and ends with the 2nd to last round.   Can you integrate additional optional parameters to the constructor to enhance the already functional implementation for experiments in this direction? If you need further information, @documentation/README.md  , @documentation/blink.py  , @documentation/blink.md  , @documentation/Screenshot 2026-06-21 162611.png  , @documentation/Screenshot 2026-07-20 at 17.59.37.png  .
+
+Let me carefully analyze what the user wants.
+
+They want to "slice the construction of blink even more". Looking at the attack documentation and Figure 3:
+
+The 10-round distinguisher is divided into five Superboxes: Round 1-2, Round 3-4, Round 5-6, Round 7-8, Round 9-10.
+The user says: "The 10 round attack does not start with the first, but the second round and ends with the 2nd to last round."
+Wait, they say "The 10 round attack does not start with the first, but the second round and ends with the 2nd to last round." This means rounds 2 through 9? But 2..9 is 8 rounds. Or perhaps they mean the 10-round characteristic starts at round 2 and ends at round 9? That would be 8 rounds...
+
+Actually, looking at Figure 3 again:
+
+Top row shows Round 1 and Round 2.
+Bottom row shows Rounds 3,4,5,6,7,8.
+Top-right shows Rounds 9,10.
+Wait, that's actually 10 rounds total if we count: 1,2 on top left, 3-8 on bottom, 9,10 on top right. The figure is drawn folded to save space! The arrows from round 2 go right to "..." and then from "..." round 9 starts. Similarly round 8 goes left to "..." and round 10 goes left.
+
+So the full 10-round trail is: 1-2-3-4-5-6-7-8-9-10. The user says "does not start with the first, but the second round and ends with the 2nd to last round." That means the characteristic is across rounds 2 through 9 (8 rounds). But they call it a 10-round attack... Maybe they mean the distinguisher covers rounds 2-9? Or maybe the "10 rounds" in the paper refers to the total cipher rounds being 10 (ra+rb+...), and the attack focuses on rounds 2-9?
+
+Actually, let's re-read what the user wrote: "The 10 round attack does not start with the first, but the second round and ends with the 2nd to last round."
+
+In the paper's language: "For Blink-64, we find a 10-round weak tweak-key differential trail". The trail is divided into Superboxes. The user wants to be able to construct slices like:
+
+Just the Superbox Round 3-4 (a 2-round slice)
+Or rounds 3-6 (two Superboxes, as mentioned in the experiments: "experiments on two Superboxes of Round 3-4 and Round 5-6")
+Or rounds 1-4 (Superboxes 1-2)
+So they need to be able to:
+
+Skip initial whitening w0.
+Skip final whitening w1.
+Start at an arbitrary round within the sequence.
+End at an arbitrary round within the sequence.
+Optionally include/exclude the middle stages (h0, hxor, h1).
+The most flexible approach is to expose parameters that control which structural elements are included. Given the rigid structure of Blink, I think the cleanest API is to add:
+
+skip_w0 / skip_w1 (booleans, default False) - to omit whitening
+start_fwd_round or fwd_offset - how many forward rounds to skip from the beginning
+end_fwd_round or similar for backward?
+Actually, since the structure is fwd outer -> h0 -> fwd inner -> hxor -> bwd inner -> h1 -> bwd outer, the most natural "slice" parameters might be indices into the round arrays.
+But wait - the user already has rl and rr which control the number of outer and inner rounds on each side. What they need is to be able to offset which round keys are used, and to optionally drop the whitening/middle layers.
+
+For example, to get "Round 3-4" for Blink-64 (ra=2, rb=3):
+
+Skip w0.
+Skip first fwd outer round (round 1, uses rk[0]).
+Include second fwd outer round (round 2, uses rk[1])... wait, round 2 is still in fwd outer.
+Then h0.
+Then first fwd inner round (round 3, uses rk[2]).
+Then second fwd inner round (round 4, uses rk[3]).
+End here before hxor? Or maybe the Superbox includes the connecting linear layer.
+For the experiments: "experiments on two Superboxes of Round 3-4 and Round 5-6, which are connected by P ◦ MK ◦ P". This suggests a slice from the start of Round 3 to the end of Round 6. Round 3 is fwd inner 1, Round 4 is fwd inner 2, Round 5 is fwd inner 3, Round 6 is bwd inner 3? No, wait. With rb=3, fwd inner has 3 rounds. Then hxor. Then bwd inner has 3 rounds. So:
+
+Round 3 = fwd inner 1 (rk[2])
+Round 4 = fwd inner 2 (rk[3])
+Round 5 = fwd inner 3 (rk[4])
+Round 6 = bwd inner 3 (rk[2])
+So the slice "Round 3-6" includes: part of fwd inner (rounds 3,4,5), hxor, then part of bwd inner (round 6). That's a contiguous segment of the cipher!
+
+The key insight is: the full cipher is a sequence of stages:
+
+w0
+fwd round (rk[0], rc[0]) -- Round 1
+fwd round (rk[1], rc[1]) -- Round 2
+h0 stage (S, M, AK(h0), P)
+fwd round (rk[2], rc[2]) -- Round 3
+fwd round (rk[3], rc[3]) -- Round 4
+fwd round (rk[4], rc[4]) -- Round 5
+hxor stage (S, M, AK(hxor), S)
+bwd round (rc'[0], rk[0]) -- Round 6? (Wait, is Round 6 the first bwd inner round?)
+bwd round (rc'[1], rk[1]) -- Round 7
+bwd round (rc'[2], rk[2]) -- Round 8
+h1 stage (P^{-1}, AK(h1), M, S)
+bwd round (rc'[3], rk[3]) -- Round 9
+bwd round (rc'[4], rk[4]) -- Round 10
+w1
+If this mapping is correct (and it seems consistent with 10 rounds total = 2+3+3+2), then:
+
+The paper's "10-round distinguisher" is the full cipher without whitening.
+"Round 1-2" = stages 2,3 (outer fwd rounds). Connected by P between them.
+"Round 3-4" = stages 5,6 (first two inner fwd rounds).
+"Round 5-6" = stages 7,9 (last inner fwd round + first inner bwd round). Wait, stage 7 is fwd round with rk[4]. Stage 9 is bwd round with rc'[0], rk[0]. Between them is hxor stage.
+"Round 7-8" = stages 10,11 (middle bwd rounds).
+"Round 9-10" = stages 13,14 (outer bwd rounds).
+Hmm, but probability between 5 and 6 is 2^{-18.415}, while between others it's 2^{-12} or 2^{-4}. The hxor stage in the middle has two S-box layers, which could explain the different probability structure.
+
+But the paper says: "divided into five Superboxes, i.e., Round 1-2, Round 3-4, Round 5-6, Round 7-8 and Round 9-10." And the probabilities are between these pairs:
+
+1↔2: 2^-12
+3↔4: 2^-4
+5↔6: 2^-18.415
+7↔8: 2^-4
+9↔10: 2^-12
+Wait, in Figure 3:
+
+Top: between 1 and 2: 2^{-12}.
+Bottom: between 3 and 4: 2^{-4}.
+Bottom middle: between 5 and 6: 2^{-18.415}? No, the arrow is between round 5 and round 6 going down. Wait, it says 2^{-18.415} next to an arrow between round 5 and 6, but pointing from round 5 S output down to round 6 S input. Actually, the 2^{-18.415} label is near the connection between the two "lanes", between round 5 and round 6. In Figure 3, round 5 ends with S, then there's a downward arrow to round 6's S. This might represent the transition through the middle hxor stage.
+Given this, the simplest way to slice is to allow the user to specify:
+
+fwd_r0: starting index for forward rounds (0-based into rk array)
+fwd_r1: ending index (exclusive) for forward rounds
+bwd_r0: starting index for backward rounds
+bwd_r1: ending index for backward rounds
+include_h0, include_h1, include_hxor: booleans
+include_w0, include_w1: booleans
+But that's quite complex. Let's think about what would actually be used.
+
+The paper's experiment: "two Superboxes of Round 3-4 and Round 5-6". This means a slice containing:
+
+Skip w0
+Skip round 1
+Include round 2? No, "Round 3-4 and Round 5-6" implies the slice starts at round 3. But then the paper says these are "connected by P ◦ MK ◦ P". If the slice is rounds 3-6, it starts at rk[2] and ends at bwd round rk[0]?
+Wait, in the experiment they evaluate "the differential from Round 3 to Round 6". That means they look at a 4-round core: rounds 3, 4, 5, 6.
+
+Another experiment: "evaluate the differential from Round 1 to Round 4 with 2^23 pairs". That's rounds 1, 2, 3, 4. This includes the first two fwd outer rounds and first two fwd inner rounds (with h0 in between).
+
+So to support this, the user needs to select:
+
+Start round r_start (1-indexed, from 1 to total_rounds)
+End round r_end (1-indexed, inclusive, from r_start to total_rounds)
+And optionally whether to include whitening.
+
+Given the round mapping I derived: Round 1: fwd outer, rk[0] Round 2: fwd outer, rk[1] Round 3: fwd inner, rk[2] Round 4: fwd inner, rk[3] Round 5: fwd inner, rk[4] Round 6: bwd inner, rk[0] Round 7: bwd inner, rk[1] Round 8: bwd inner, rk[2] Round 9: bwd outer, rk[3] Round 10: bwd outer, rk[4]
+
+Wait, for bwd inner: the code uses rk_int[r] for r in range(rr). If rr=3, that's rk[0], rk[1], rk[2]. These would map to rounds 6,7,8. For bwd outer: rk_int[rr + r] for r in range(rl). If rl=2, rr=3, that's rk[3], rk[4]. These map to rounds 9,10.
+
+And fwd outer used rk[0], rk[1] (rounds 1,2). Fwd inner used rk[2], rk[3], rk[4] (rounds 3,4,5).
+
+So the mapping from round index (1-based) to array index is:
+
+Rounds 1..ra: fwd outer, indices 0..ra-1
+Rounds ra+1 .. ra+rb: fwd inner, indices ra..ra+rb-1
+Rounds ra+rb+1 .. ra+2*rb: bwd inner, indices 0..rb-1
+Rounds ra+2rb+1 .. 2(ra+rb): bwd outer, indices rb..ra+rb-1
+For ra=2, rb=3 (total 10): 1: fwd outer, idx 0 2: fwd outer, idx 1 3: fwd inner, idx 2 4: fwd inner, idx 3 5: fwd inner, idx 4 6: bwd inner, idx 0 7: bwd inner, idx 1 8: bwd inner, idx 2 9: bwd outer, idx 3 10: bwd outer, idx 4
+
+This is consistent!
+
+Between round 2 and 3: h0 stage. Between round 5 and 6: hxor stage. Between round 8 and 9: h1 stage.
+
+So to implement slicing by round numbers, I can add parameters first_round and last_round (1-indexed, inclusive) along with include_w0/include_w1 booleans. The constructor then includes only the stages that fall within this range.
+
+But wait - rl and rr already exist. They control how many rounds from the outside in are included. If rl=1, rr=1 for Blink-64, the current code produces:
+
+w0
+fwd outer: 1 round (rk[0])
+h0
+fwd inner: 1 round (rk[2]? No, current code uses rk_int[rl+r], so with rl=1, rr=1: fwd inner uses rk_int[1]) Wait, let's trace current code with rl=1, rr=1 for Blink-64 (ra=2, rb=3):
+fwd outer: r=0 uses rk[0] -- correct, round 1
+h0
+fwd inner: r=0 uses rk[0+0]=rk[1] -- wait, this is rk[1], which is the key for round 2!
+hxor
+bwd inner: r=0 uses rk[0] -- this is the key for round 6 (bwd inner 1)
+h1
+bwd outer: r=0 uses rk[1] -- this is the key for round 9 (bwd outer 1, since rr=1, rb=3, so bwd outer uses indices 1..2? No, rr=1 means bwd outer uses rk_int[1+0] = rk[1]. But according to the mapping, bwd outer should use indices rb..ra+rb-1 = 3..4. With rr=1, bwd outer uses rk[1], which is round 2's key!
+This means rl and rr don't just truncate the number of rounds, they also change which keys are used. Let me re-check the intent of the current code.
+
+In current code, rl fwd rounds use rk_int[r] for r=0..rl-1. rr fwd rounds use rk_int[rl+r] for r=0..rr-1. So if rl=1, rr=1: fwd uses rk[0], rk[1]. These are the first two round keys. Then bwd inner uses rk_int[r] for r=0..rr-1 = rk[0]. Then bwd outer uses rk_int[rr+r] for r=0..rl-1 = rk[1].
+
+So with rl=1, rr=1:
+
+Fwd: rk[0], rk[1] (usually outer fwd and inner fwd respectively, when ra=2, rb=3)
+Bwd inner: rk[0]
+Bwd outer: rk[1]
+This is a reflection of the first rl+rr round keys, but applied symmetrically. It's a "reduced" version that takes the first rl outer keys and first rr inner keys and reflects them.
+
+For the user's experiment, they want to use the correct keys for the rounds they select. For example, "Round 3 to Round 6" should use:
+
+Round 3: rk[2]
+Round 4: rk[3]
+Round 5: rk[4]
+Round 6: rk[0] (bwd inner)
+So they need key indices 2,3,4,0. The current rl/rr mechanism cannot express this because it always takes contiguous prefixes.
+
+Therefore, the most useful addition is to allow specifying round indices directly. But adding a full "start/end round" mechanism would be a significant rewrite.
+
+Another approach: the user could simply pass custom rks, rcs, etc. But in the current implementation, the key schedule is derived from master_key internally.
+
+A cleaner approach for experiments: add optional parameters for custom round-key and constant arrays. But the existing code already derives these internally. We could add round_keys, round_constants, round_constants_prime, whitening_keys, hash_values as optional overrides. But that's tedious.
+
+Let me think about what "slice the construction" really means in context of the paper. The experiments evaluate the differential through a subset of rounds, treating the cipher as a black box function for those rounds. To do this in CiVerLy, they want a Cipher object representing just those rounds.
+
+Given the complexity of the reflection structure, I think the best parameters to add are:
+
+fwd_start: offset into the forward round arrays (how many fwd rounds to skip)
+fwd outer skip: fwd_start_outer (between 0 and ra)
+fwd inner skip: fwd_start_inner (between 0 and rb)
+bwd_start: offset into the backward round arrays
+bwd inner skip: bwd_start_inner
+bwd outer skip: bwd_start_outer
+Booleans to toggle the middle layers: include_h0, include_h1, include_hxor.
+Booleans to toggle whitening: include_w0, include_w1.
+Wait, but for "Round 3 to Round 6", we need:
+
+Skip rounds 1-2 (fwd outer skip 2, i.e., skip all fwd outer)
+Include round 3-5... no, only up to round 5? Round 3,4,5 are inner fwd. But the slice is 3-6, so:
+Round 3 (fwd inner 1): include
+Round 4 (fwd inner 2): include
+Round 5 (fwd inner 3): include
+Between 5 and 6: hxor (include)
+Round 6 (bwd inner 3): include So we would need fwd_inner_start=0, fwd_inner_count=3 and bwd_inner_start=2, bwd_inner_count=1 (starting from the last bwd inner round).
+This is getting complicated. Let me look at how the paper describes the experiments again:
+
+"We firstly perform experiments on two Superboxes of Round 3-4 and Round 5-6, which are connected by P ◦ MK ◦ P." Wait, if they are connected by P ◦ MK ◦ P, and Superboxes are Round 3-4 (fwd inner 1-2) and Round 5-6 (fwd inner 3 + bwd inner 1?), then "connected by P ◦ MK ◦ P" means the output of round 4 goes through P ◦ MK ◦ P to become the input of round 5? But in the cipher structure, between round 4 and 5 there's just the round function itself (S, M, AK, AC, P). The connecting layer between Superboxes is P ◦ MK ◦ P? Actually, a Superbox in the paper seems to be: S -> M -> AK -> AC -> P -> S -> M -> AK -> AC. Then the connection to the next Superbox is P? No, the paper says "connect these Superboxes through the surrounding linear layer: P (or P) first splits the four cells of each column into four different columns, after which M mixes the nibbles within each column, and finally another P (or P) is applied."
+
+So the linear layer between Superboxes is P ◦ M ◦ P. But in the cipher, between two consecutive rounds there's P from the first round. To get P ◦ M ◦ P, you need the P of round i, then M of round i+1, then P of round i+1. Wait, M is inside the round. So P_i -> S_{i+1} -> M_{i+1} -> P_{i+1}. But S breaks the linear layer.
+
+Ah, I think I finally understand the Superbox definition from the paper now. A Superbox consists of two rounds where the inner linear layer is considered together:
+
+Input diff goes through S of round 1
+Then M of round 1
+Then AK/AC of round 1
+Then P of round 1
+Then S of round 2
+Then M of round 2
+Then AK/AC of round 2 ...and the trail probability is evaluated across this.
+The "connection" to the next Superbox is just the P of the second round. Wait, "P ◦ MK ◦ P" would be permutation, mixcolumn+key, permutation. That doesn't align with the round structure.
+
+Let me look at Figure 3 again. Between Round 3 and Round 4, there's an XOR with rk4 ⊕ rc4 and rk2 ⊕ rc2'. Wait, the figure shows two arrows pointing to the XOR: one from the top path and one from the bottom path. This is because the top path is the forward difference and the bottom path is the backward difference, and they meet at the XOR. This is a related-tweak differential where the same tweak is used? Or it's showing the two directions of the reflection trail?
+
+Actually, I think Figure 3 shows a single differential trail but the top and bottom rows alternate. Like a snaking path: Start (top left, label 1) -> S -> M -> (XOR) -> S -> M -> (XOR) -> P -> ... label 2 ... -> (goes to right off page) ... -> label 9 (top right) -> S -> M -> (XOR) -> S -> M -> (XOR) -> P -> ...
+
+Then the path comes back from the right? No, the arrows on top go right, arrows on bottom go left. This is because the reflection cipher goes forward then backward. The bottom row is the return path: ... label 8 (bottom left) <- S <- M <- (XOR) <- S <- M <- (XOR) <- P <- ... label 7 ... <- label 6 ... <- label 5 ... <- label 4 ... <- label 3 ...
+
+Wait, but label 3,4,5,6,7,8 are in order from left to right on the bottom row! The arrows on the bottom point LEFT. So reading the bottom row from right to left: label 8 is leftmost, label 3 is rightmost. That means the sequence is: Top left: 1 -> 2 -> ... -> 9 -> 10 (top right) Bottom right: 3 -> 4 -> 5 -> 6 -> 7 -> 8 (bottom left)
+
+Oh! The bottom row is laid out left-to-right but the arrows point left because it's the backward direction going from right to left in the diagram. The physical path is: ... after Round 2, goes to h0 (not shown between 2 and 3), then Round 3 (bottom right), Round 4, Round 5, Round 6, Round 7, Round 8 (bottom left), then h1 (between 8 and 9), then Round 9 (top right), Round 10 (top right? No, 9 and 10 are on top).
+
+Actually the top row has: Left side: 1, 2 Right side: 9, 10 Bottom row: 3, 4, 5, 6, 7, 8
+
+Sequence: 1-2-3-4-5-6-7-8-9-10. The bottom row reads left-to-right as 8-7-6-5-4-3 because it's the return path (arrows point left). But text labels "3", "4", "5", "6", "7", "8" are placed with 3 on the right and 8 on the left.
+
+OK, so now for slicing:
+
+Rounds 3-4: The slice starts at the input to Round 3 (just after h0) and ends at the output of Round 4.
+To experiment on Superboxes Round 3-4 and Round 5-6: the slice starts at input to Round 3 and ends at output of Round 6.
+Given the current code structure:
+
+# middle: S, M, AK(h0), P
+node = middle_stage(cipher, node, h0_int, "h0")
+node = cipher.add_subcipher(perm, ...)
+# rr forward keyed rounds
+for r in range(rr):
+    node = cipher.add_subcipher(fwd_round, ...)
+    cipher.nodes[node].nodes[fwd_rk].const = rk_int[rl + r]
+    cipher.nodes[node].nodes[fwd_rc].const = rc_int[rl + r]
+# middle: S, M, AK(h0^h1), S
+node = middle_stage(cipher, node, h_xor_int, "hxor")
+node = cipher.add_subcipher(subcells, ...)
+# rr backward keyed rounds
+for r in range(rr):
+    node = cipher.add_subcipher(bwd_round, ...)
+    cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[r]
+    cipher.nodes[node].nodes[bwd_rk].const = rk_int[r]
+Currently, if rl=ra and rr=rb, it builds exactly the full cipher. If we want "Round 3 to Round 6" for Blink-64:
+
+Skip w0
+Skip fwd outer rounds (don't include them)
+Include h0
+Include fwd inner rounds 1,2,3 (all 3 of them, i.e., rr=3 but starting from rl=ra=2, so indices 2,3,4) -- Wait, current code with rl=2, rr=3 includes fwd inner rounds rk[2], rk[3], rk[4]. Good.
+Include hxor
+Include bwd inner round 3 only (rr=1 but starting from index 2? No, current code uses indices 0..rr-1. So if rr=1, it uses rk[0]. If we want only the last bwd inner round (rk[2]), we need to be able to offset.)
+So the missing capability is:
+
+Skip w0 / w1.
+Skip some initial fwd rounds (outer and/or inner).
+Skip some initial bwd rounds (inner and/or outer).
+Optionally include/exclude the middle stages.
+The simplest way to add all of this while preserving backward compatibility is to add boolean flags for each major segment:
+
+include_w0 (default True)
+include_w1 (default True)
+include_h0 (default True)
+include_h1 (default True)
+include_hxor (default True)
+And also add offset parameters for the round loops:
+
+fwd_outer_offset: number of initial fwd outer rounds to skip (default 0)
+fwd_inner_offset: number of initial fwd inner rounds to skip (default 0)
+bwd_inner_offset: number of initial bwd inner rounds to skip (default 0)
+bwd_outer_offset: number of initial bwd outer rounds to skip (default 0)
+Wait, but rl and rr currently control the COUNT of rounds. If I add offsets, I need to be careful.
+
+Alternative: replace rl and rr with more explicit parameters:
+
+fwd_outer_range: a tuple (start, end) for fwd outer rounds, or just count + offset.
+fwd_inner_range: same.
+bwd_inner_range: same.
+bwd_outer_range: same.
+But changing rl/rr semantics would break backward compatibility.
+
+Best approach: keep rl and rr exactly as they are (number of rounds to include from the outside-in on each side), but add:
+
+fwd_outer_skip: skip this many initial fwd outer rounds (default 0)
+fwd_inner_skip: skip this many initial fwd inner rounds (default 0)
+bwd_inner_skip: skip this many initial bwd inner rounds (default 0)
+bwd_outer_skip: skip this many initial bwd outer rounds (default 0)
+include_w0 (default True)
+include_w1 (default True)
+include_h0 (default True)
+include_h1 (default True)
+include_hxor (default True)
+Wait, with rl and rr, the fwd outer count is rl, and fwd inner count is rr. If I add fwd_outer_skip, then the fwd outer rounds included would be from index fwd_outer_skip to fwd_outer_skip + rl - 1. But rl is currently capped by ra. Should the cap still be ra? If fwd_outer_skip=1 and rl=2 for ra=2, then we'd try to include indices 1 and 2, but index 2 is invalid. So we need fwd_outer_skip + rl <= ra.
+
+Similarly, fwd_inner_skip + rr <= rb. Wait, but for bwd inner: current code includes rr rounds using indices bwd_inner_skip to bwd_inner_skip + rr - 1. These must be < rb. And for bwd outer: rl rounds using indices bwd_outer_skip to bwd_outer_skip + rl - 1 offset by rr? Actually, current code uses rk_int[rr + r] for bwd outer. So the index is rr + r. If we add bwd_outer_skip, should it be rr + bwd_outer_skip + r?
+
+Let's trace what indices we need for each segment:
+
+Fwd outer: rk_int[fwd_outer_skip + r] for r in range(rl), with fwd_outer_skip + rl <= ra
+Fwd inner: rk_int[ra + fwd_inner_skip + r] for r in range(rr), with fwd_inner_skip + rr <= rb
+Bwd inner: rk_int[bwd_inner_skip + r] for r in range(rr), with bwd_inner_skip + rr <= rb
+Bwd outer: rk_int[rb + bwd_outer_skip + r]? Wait, current code uses rk_int[rr + r]. For full cipher (rr=rb), that's rk_int[rb + r]. But for reduced (rr<rb), it's rk_int[rr + r]. Is that correct?
+If rr=1 for rb=3: bwd outer uses rk_int[1 + r], i.e., rk[1], rk[2] (if rl=2). But bwd outer in the full cipher uses indices rb..ra+rb-1 = 3,4. Why would the reduced cipher use 1,2? Because it's reflecting the included rounds. The first rr keys are used in both fwd inner (if included) and bwd inner. The next rl keys are used in fwd outer (if included) and bwd outer. This is what the current code implements.
+
+For slicing "Round 3 to Round 6" (ra=2, rb=3):
+
+We need fwd inner rounds 1,2,3: rk[2], rk[3], rk[4]. Using current code, rl=0 (no fwd outer), rr=3 (all fwd inner). Fwd inner uses rk_int[rl+r] = rk_int[0+0], rk_int[0+1], rk_int[0+2] = rk[0], rk[1], rk[2]. That's WRONG! It would use the first 3 keys rk[0..2], not rk[2..4].
+So the current rl/rr mechanism fundamentally assumes you are taking prefixes of the round key arrays. It can't express "skip the first two forward rounds and take the next three" because the reflection cipher's key indexing ties outer and inner rounds to specific positions.
+
+This means my offset idea doesn't work cleanly with the current prefix-based indexing.
+
+Let me reconsider. What if we abandoned the simple rl/rr prefix model and instead allowed explicit specification of which keys to use for each segment? Or better yet, we can map the user's "round number" to the correct key indices and build the cipher accordingly.
+
+If we define round numbers 1..(ra+rb)*2 = 10 for Blink-64:
+
+Round 1..ra: fwd outer, key index = r-1
+Round ra+1..ra+rb: fwd inner, key index = r-1
+Round ra+rb+1..ra+2*rb: bwd inner, key index = r - (ra+rb+1)
+Round ra+2rb+1..2(ra+rb): bwd outer, key index = r - (ra+rb+1)
+Wait, for bwd outer: round 9, key index should be 3. r=9, ra=2, rb=3. r - (ra+rb+1) = 9-6 = 3. Correct. Round 10: 10-6=4. Correct. For bwd inner: round 6, index = 6-6 = 0. Correct. Round 8: 8-6=2. Correct. For fwd inner: round 3, index = 3-1 = 2. Correct. For fwd outer: round 2, index = 2-1 = 1. Correct.
+
+And between rounds:
+
+After round ra (round 2): h0
+After round ra+rb (round 5): hxor
+After round ra+2*rb (round 8): h1
+So if the user specifies first_round=3, last_round=6:
+
+Round 3: fwd inner (key idx 2)
+Round 4: fwd inner (key idx 3)
+Round 5: fwd inner (key idx 4)
+Between 5 and 6: hxor
+Round 6: bwd inner (key idx 0)
+If they specify first_round=1, last_round=4:
+
+w0 (optional, but if include_w0=True and first_round=1)
+Round 1: fwd outer (idx 0)
+Round 2: fwd outer (idx 1)
+Between 2 and 3: h0 (include if last_round >= 3, but since first_round=1 and last_round=4, the path goes through h0 because round 3 is after h0)
+Round 3: fwd inner (idx 2)
+Round 4: fwd inner (idx 3)
+This is exactly what we need! The implementation would:
+
+Determine first_round and last_round (1-indexed, inclusive, defaults 1 and total_rounds).
+Determine include_w0 (default True if first_round==1 else False) and include_w1 (default True if last_round==total_rounds else False), or explicit booleans.
+Iterate round numbers from first_round to last_round, appending the appropriate stage for each.
+Insert h0 after round ra if `first_round <= ra < last_round
+
+Now I have a clear picture. Looking at the reference documentation/blink.py, the encrypt function reveals the exact round sequence and key indexing:
+
+Whitening w[0]
+for r in range(ra): forward outer rounds using rk[r] and rc[r]
+h0 middle (S, M, AK(h[0]), P)
+for r in range(rb): forward inner rounds using rk[r + ra] and rc[r + ra]
+hxor middle (S, M, AK(h_xor), S)
+for r in range(rb): backward inner rounds using rk[r] and rc_prime[r]
+h1 middle (P^{-1}, AK(h[1]), M, S)
+for r in range(ra): backward outer rounds using rk[r + rb] and rc_prime[r + rb]
+Whitening w[1]
+Wait! This is subtly different from what I inferred from the CiVerLy code! In the reference code:
+
+Backward inner uses rk[r] for r in range(rb).
+Backward outer uses rk[r + rb] for r in range(ra).
+For ra=2, rb=3:
+
+Fwd outer: rk[0], rk[1]
+Fwd inner: rk[2], rk[3], rk[4]
+Bwd inner: rk[0], rk[1], rk[2]
+Bwd outer: rk[3], rk[4]
+So the mapping to paper "rounds" is: 1: fwd outer, rk[0] 2: fwd outer, rk[1] 3: fwd inner, rk[2] 4: fwd inner, rk[3] 5: fwd inner, rk[4] 6: bwd inner, rk[2] -- NOT rk[0]! It's rk[2] for the FIRST bwd inner round when rb=3. 7: bwd inner, rk[1] 8: bwd inner, rk[0] 9: bwd outer, rk[4] 10: bwd outer, rk[3]
+
+Wait, the loop is for r in range(rb) which means r = 0, 1, 2. And it uses rk[r]. So:
+
+Round 6 (first bwd inner): rk[0]
+Round 7: rk[1]
+Round 8: rk[2]
+And backward outer: for r in range(ra) uses rk[r + rb]. With ra=2, rb=3:
+
+Round 9: rk[3]
+Round 10: rk[4]
+So the full mapping for Blink-64 is: 1: fwd outer, rk[0] 2: fwd outer, rk[1] 3: fwd inner, rk[2] 4: fwd inner, rk[3] 5: fwd inner, rk[4] 6: bwd inner, rk[0] 7: bwd inner, rk[1] 8: bwd inner, rk[2] 9: bwd outer, rk[3] 10: bwd outer, rk[4]
+
+But wait, the paper's Figure 2 labels backward rounds as rk_b ⊕ rc'_b, ..., rk_1 ⊕ rc'_1 (bottom inner), then rk_{b+1} ⊕ rc'_{b+1}, ..., rk_{a+b} ⊕ rc'_{a+b} (bottom outer). For a=2, b=3: bottom inner uses rk_3, rk_2, rk_1. Bottom outer uses rk_4, rk_5. In the code, bottom inner uses rk[0], rk[1], rk[2] which correspond to rk_1, rk_2, rk_3. So the code applies them in order rk_1, rk_2, rk_3. But the paper says the inverse round function uses rk_b ⊕ rc'_b first. Is there a mismatch?
+
+Let's look at the paper's R_bar = S ◦ MK_{hat(rk) ⊕ hat(rc)} ◦ P_bar. The bottom of Figure 2 shows from right to left: S MK P_bar with rk_b ⊕ rc'_b, then ... rk_1 ⊕ rc'_1, then S MK P_bar with h2(t), then rk_{b+1} ⊕ rc'_{b+1}, ..., rk_{a+b} ⊕ rc'_{a+b}.
+
+Wait, reading Figure 2 from left to right on the bottom: c then S MK P_bar with rk_1 ⊕ rc'_1, then ..., then S MK P_bar with rk_b ⊕ rc'_b, then S MK P_bar with h2(t), then S MK P_bar with rk_{b+1} ⊕ rc'_{b+1}, ..., then S MK P_bar with rk_{a+b} ⊕ rc'_{a+b}.
+
+But the encrypt function in blink.py does:
+
+for r in range(self.rb):
+    self.inv_permutation(state)
+    self.add_round_constant(state, self.round_const_prime[r])
+    self.add_round_key(state, rk[r])
+    ...
+Wait! It does inv_permutation FIRST, then constant, then key, then mix, then sub! But the paper says R_bar = S ◦ MK_{hat(rk) ⊕ hat(rc)} ◦ P_bar. MK_{hat(k)}(x) = M(x) ⊕ hat(k). So R_bar = S ◦ M(• ⊕ hat(rk) ⊕ hat(rc)) ◦ P_bar? Or S ◦ (M(•) ⊕ hat(rk) ⊕ hat(rc)) ◦ P_bar. The code does: inv_permutation, add_constant, add_key, mix_columns, sub_bytes. This is: S ◦ M ◦ AK(k) ◦ AC(c) ◦ P_bar. Since S and M are involutions, S = S^{-1}, M = M^{-1}. The inverse of R = P ◦ AC ◦ AK ◦ M ◦ S is S^{-1} ◦ M^{-1} ◦ AK^{-1} ◦ AC^{-1} ◦ P^{-1}. Since AK and AC are XORs, they are self-inverse. So R^{-1} = S ◦ M ◦ AK ◦ AC ◦ P^{-1}. Yes! The code implements S ◦ M ◦ AK ◦ AC ◦ P^{-1}. The paper writes R_bar = S ◦ MK_{hat(rk) ⊕ hat(rc)} ◦ P_bar. MK_{hat(k)}(x) = M(x) ⊕ hat(k). So S ◦ MK_{hat(k)} ◦ P_bar = S ◦ (M(•) ⊕ hat(k)) ◦ P_bar. Since hat(k) = M(k)? The paper says "z_hat = M(z)". So hat(rk) ⊕ hat(rc) = M(rk) ⊕ M(rc) = M(rk ⊕ rc). And M(x) ⊕ M(k) = M(x ⊕ k). So MK_{hat(k)}(x) = M(x ⊕ k). Thus R_bar = S ◦ M(• ⊕ k) ◦ P_bar. Which is exactly S ◦ M ◦ AK(k) ◦ P_bar since M is linear. And AC is just another XOR. So yes, it matches.
+
+Now, about the key order in backward rounds: The code's encrypt does bwd inner with rk[r] for r=0..rb-1, which is rk[0..2]. Decrypt does bwd inner with rk[self.rb - r - 1], i.e., reversed. This is consistent: encryption goes forward with keys in one order, backward with keys in potentially a different order, and decryption reverses everything.
+
+For our purpose (differential trail analysis in CiVerLy), the CiVerLy blink.py already faithfully replicates this. The key indexing in the CiVerLy code is:
+
+fwd outer: rk_int[r] for r in range(rl)
+fwd inner: rk_int[rl + r] for r in range(rr)
+bwd inner: rk_int[r] for r in range(rr)
+bwd outer: rk_int[rr + r] for r in range(rl)
+Wait, in CiVerLy code:
+
+# rl backward keyed rounds
+for r in range(rl):
+    ...
+    cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[rr + r]
+    cipher.nodes[node].nodes[bwd_rk].const = rk_int[rr + r]
+But in the reference blink.py:
+
+for r in range(self.ra):
+    ...
+    self.add_round_constant(state, self.round_const_prime[r + self.rb])
+    self.add_round_key(state, rk[r + self.rb])
+There's a mismatch! The reference uses rc_prime[r + rb] for bwd outer, while CiVerLy uses rc_prime[rr + r]. Since rr <= rb, these are different when rr < rb.
+
+Similarly for keys: reference uses rk[r + rb], CiVerLy uses rk_int[rr + r].
+
+This means the current BLINK_CVL with reduced rr uses a different set of keys/constants than the full cipher would for those rounds. It effectively takes a prefix of rb for the inner backward rounds, and then a prefix of ra shifted by rr.
+
+But wait, maybe the reference code's encrypt is designed such that if you want a reduced-round version, you'd call it with a truncated rk array? No, the rk array is always length ra+rb.
+
+When ra=2, rb=3, full cipher bwd outer uses rk[3], rk[4] and rc_prime[3], rc_prime[4]. If rr=1 in CiVerLy, bwd inner uses rk[0] and rc_prime[0]. Bwd outer uses rk[1] and rc_prime[1]. But in the reference with ra=2, rb=3, you can't just change ra and rb because they are fixed per variant. The rl and rr parameters in CiVerLy are meant to let you build a reduced cipher by taking a prefix of round keys, effectively "reflecting" fewer rounds. This is a valid reduced-round construction: use the first rl outer keys and first rr inner keys and build a smaller reflected cipher.
+
+However, for the user's purpose (slicing an existing full cipher to analyze rounds 3-6), they need to use the actual keys for those rounds, not prefixes.
+
+So the new parameters should allow specifying offsets into the key arrays while maintaining the effective rl/rr counts.
+
+Actually, the cleanest API that supports both "reduced round" and "sliced full cipher" is:
+
+Keep rl and rr as the number of rounds in each segment (= count).
+Add fwd_outer_offset (default 0): skip this many forward outer rounds.
+Add fwd_inner_offset (default 0): skip this many forward inner rounds.
+Add bwd_inner_offset (default 0): skip this many backward inner rounds.
+Add bwd_outer_offset (default 0): skip this many backward outer rounds.
+Add include_w0, include_w1, include_h0, include_h1, include_hxor (default True).
+And then the key indices would be:
+
+Fwd outer: fwd_outer_offset + r for r in range(rl). Must have fwd_outer_offset + rl <= ra.
+Fwd inner: ra + fwd_inner_offset + r for r in range(rr). Must have fwd_inner_offset + rr <= rb.
+Bwd inner: bwd_inner_offset + r for r in range(rr). Must have bwd_inner_offset + rr <= rb.
+Bwd outer: rb + bwd_outer_offset + r for r in range(rl). Must have bwd_outer_offset + rl <= ra.
+Wait, should bwd outer use rb as base or rr? In the reference code, bwd outer ALWAYS uses rk[r + rb] regardless of how many inner rounds you actually do. The rb in the index is the variant's total inner rounds, not the included count. But in CiVerLy's existing reduced-round model, it uses rr + r so that the reflected cipher stays consistent.
+
+If we are slicing the full cipher, we should use the variant's fixed ra and rb as the base for offsets. The user's rl and rr then become the number of rounds to include from each segment.
+
+For example, to get "Round 3 to Round 6" in Blink-64 (ra=2, rb=3):
+
+Round 3 is fwd inner, index 2. fwd_inner_offset = 0? No, round 3 is the FIRST fwd inner. If we want to start at round 3, we skip fwd outer entirely (rl=0 for outer, but actually we just don't include the outer segment).
+Include h0 (since round 3 comes after h0).
+Include fwd inner rounds: all 3 of them. fwd_inner_offset=0, rr=3. Keys: ra+0..ra+2 = 2,3,4.
+Include hxor (since round 6 comes after hxor).
+Include bwd inner: only the LAST one (round 6 is bwd inner round 3? Let's check: bwd inner rounds are rk[0], rk[1], rk[2] applied in that order in encryption. Round 6 is the FIRST bwd inner round, which uses rk[0]. Wait, the loop is for r in range(rb), so the order is r=0,1,2. That's rk[0], rk[1], rk[2]. So round 6 = rk[0]. Round 8 = rk[2]. So to include round 6 only: bwd_inner_offset=0, rr=1. Key: 0.
+Hmm, but the user says "Round 5-6". Round 5 is fwd inner 3 (rk[4]). Round 6 is bwd inner 1 (rk[0]). The slice 3-6 includes fwd inner 1,2,3 then hxor then bwd inner 1.
+
+To get this with offsets:
+
+fwd_outer_offset = 2 (skip both outer fwd), rl = 0 (include none of the outer fwd rounds... but wait, rl is defined as "number of outer rounds". If I set rl=0, then bwd outer count is also 0).
+fwd_inner_offset = 0, rr = 3 (include all 3 inner fwd).
+include_h0 = True, include_hxor = True.
+bwd_inner_offset = 0, rr = 1 for bwd inner? But rr is used for both fwd inner and bwd inner counts in the current code.
+Actually, rr is overloaded: it's the count for both fwd inner and bwd inner. We can't have fwd_inner_count=3 and bwd_inner_count=1 with a single rr parameter.
+
+So to truly support arbitrary contiguous slices, we need separate counts for each segment OR a unified "start/end round" abstraction.
+
+Given the complexity, a unified first_round / last_round (1-indexed) parameter set is much cleaner to use and harder to misuse.
+
+Let me design the first_round / last_round approach.
+
+Total rounds = 2 * (ra + rb). For each round number r (1-indexed):
+
+Segment and key index:
+1 <= r <= ra: fwd outer, array_idx = r-1
+ra+1 <= r <= ra+rb: fwd inner, array_idx = r-1
+ra+rb+1 <= r <= ra+2*rb: bwd inner, array_idx = r - (ra+rb+1)
+ra+2*rb+1 <= r <= 2*(ra+rb): bwd outer, array_idx = r - (ra+rb+1)
+Wait, let's verify with ra=2, rb=3: 1: fwd outer, idx 0 2: fwd outer, idx 1 3: fwd inner, idx 2 4: fwd inner, idx 3 5: fwd inner, idx 4 6: bwd inner, idx 0 (6 - 5 = 1? No, 6 - (2+3+1) = 0) 7: bwd inner, idx 1 8: bwd inner, idx 2 9: bwd outer, idx 3 (9 - 5 = 4? No, 9 - 6 = 3) 10: bwd outer, idx 4
+
+Wait, the formula r - (ra+rb+1) gives: 6: 6-6=0 7: 7-6=1 8: 8-6=2 9: 9-6=3 10: 10-6=4 Yes, this matches.
+
+Between round ra and ra+1: h0 stage.
+Between round ra+rb and ra+rb+1: hxor stage.
+Between round ra+2*rb and ra+2*rb+1: h1 stage.
+Algorithm:
+
+node = cipher.IN
+if include_w0 and first_round == 1:
+    node = AK(w0)
+
+for r in range(first_round, last_round+1):
+    determine segment and index
+    add the round stage
+    if r == ra and r < last_round:  # after round ra, before next round
+        add h0 stage
+    if r == ra+rb and r < last_round:
+        add hxor stage
+    if r == ra+2*rb and r < last_round:
+        add h1 stage
+
+if include_w1 and last_round == total_rounds:
+    node = AK(w1)
+Wait, but the stages between rounds are inserted AFTER round r if r is at a boundary and r < last_round. For example, if first_round=3, last_round=6 (ra=2, rb=3):
+
+r=3: fwd inner (idx 2)
+r=4: fwd inner (idx 3)
+r=5: fwd inner (idx 4). After this, r==ra+rb (5==5) and 5 < 6, so add hxor.
+r=6: bwd inner (idx 0).
+If first_round=1, last_round=4:
+
+r=1: fwd outer (idx 0)
+r=2: fwd outer (idx 1). After this, r==ra (2==2) and 2 < 4, so add h0.
+r=3: fwd inner (idx 2)
+r=4: fwd inner (idx 3).
+If first_round=7, last_round=10:
+
+r=7: bwd inner (idx 1)
+r=8: bwd inner (idx 2). After this, r==ra+2*rb (8==8) and 8 < 10, so add h1.
+r=9: bwd outer (idx 3)
+r=10: bwd outer (idx 4).
+This works perfectly!
+
+But we also need to preserve the existing rl/rr parameters for backward compatibility. How to reconcile first_round/last_round with rl/rr?
+
+Option A: If first_round is specified, ignore rl/rr and raise an error if both are specified. Option B: If first_round is None, compute it from rl/rr using the old prefix logic.
+
+Actually, the old rl/rr logic builds a reduced reflection cipher with rl outer and rr inner rounds, using keys 0..rl-1 and 0..rr-1. This can be viewed as a specific kind of slice:
+
+first_round = 1
+last_round = 2*(rl + rr) But with custom key indexing prefixes.
+Wait, no. With old rl=1, rr=1 for Blink-64:
+
+Fwd outer: rk[0]
+Fwd inner: rk[1]
+Bwd inner: rk[0]
+Bwd outer: rk[1] Total "rounds" = 4.
+In the reference full cipher (ra=2, rb=3):
+
+Round 1: rk[0]
+Round 2: rk[1]
+Round 3: rk[2]
+Round 4: rk[3]
+Round 5: rk[4]
+Round 6: rk[0]
+Round 7: rk[1]
+Round 8: rk[2]
+Round 9: rk[3]
+Round 10: rk[4]
+If we use first_round=1, last_round=4, the slice would be:
+
+Round 1: rk[0]
+Round 2: rk[1]
+h0
+Round 3: rk[2]
+Round 4: rk[3] This is a 4-round slice but uses keys rk[0..3], not the reduced cipher's rk[0..1].
+So the old rl/rr semantics are NOT the same as first_round/last_round. The old semantics builds a scaled-down reflection cipher. The user might still want this capability.
+
+My proposal:
+
+Add first_round and last_round as new parameters.
+If first_round is not None, rl/rr are ignored, and the cipher is built as a contiguous slice of the full round sequence with correct key indexing.
+If first_round is None, keep the existing rl/rr behavior exactly as before.
+Add explicit include_w0/include_w1 booleans that default based on whether we are at the boundaries.
+Also add include_h0, include_h1, include_hxor for extra control? Actually, if you specify first_round=3, last_round=6, you automatically transit through hxor (since round 5 ends before round 6). The middle layers between rounds are structural and should be included automatically if the slice crosses them. But maybe the user wants to start after h0 (e.g., first_round=3 means the input to round 3, which is after h0). In that case, h0 is naturally omitted because first_round > ra.
+Let me verify:
+
+first_round=3 means we start at round 3. Round 3 comes after h0. So h0 should NOT be included. Correct.
+last_round=5 means we stop after round 5. Round 5 ends before hxor. So hxor is NOT included.
+first_round=1 means we start at round 1. We include w0 (if desired) and then round 1.
+last_round=10 means we stop after round 10. We include w1 (if desired).
+The middle stages h0, hxor, h1 are included if and only if the slice crosses them:
+
+h0 included if first_round <= ra < last_round? No. h0 is BETWEEN round ra and round ra+1. So if first_round <= ra AND last_round > ra, then h0 is traversed. But if first_round = ra+1, we start AFTER h0, so h0 is not included.
+More precisely: h0 included if first_round <= ra and last_round >= ra+1.
+hxor included if first_round <= ra+rb and last_round >= ra+rb+1.
+h1 included if first_round <= ra+2*rb and last_round >= ra+2*rb+1.
+Wait, check: ra=2, rb=3. h0 is between round 2 and 3. So if first_round=1, last_round=2, h0 is not included. If first_round=2, last_round=3, h0 is included (we do round 2, then h0, then round 3). Condition: first_round <= 2 and last_round >= 3. Correct.
+
+What about if first_round=2 and last_round=2? Then we only do round 2, no h0. Condition: first_round <= 2 (true), last_round >= 3 (false). Correct, no h0.
+
+What if first_round=3 and last_round=3? Then we only do round 3, no h0. Condition: first_round <= 2 (false). Correct.
+
+So the conditions are:
+
+include_h0 = first_round <= ra and last_round > ra
+include_hxor = first_round <= ra+rb and last_round > ra+rb
+include_h1 = first_round <= ra+2*rb and last_round > ra+2*rb
+Similarly for whitening:
+
+include_w0 defaults to first_round == 1, but user can override.
+include_w1 defaults to last_round == total_rounds, but user can override.
+This is elegant and directly maps to the paper's round numbers!
+
+Now I need to modify BLINK_CVL.__init__ to support this.
+
+Let's sketch the new __init__:
+
+def __init__(self, n=64, t=64, key=0, tweak=0, name=None, rl=None, rr=None,
+             first_round=None, last_round=None,
+             include_w0=None, include_w1=None):
+If first_round is None:
+
+Use the existing logic unchanged. This preserves backward compatibility.
+rl and rr work exactly as before.
+If first_round is not None:
+
+Require last_round is not None.
+rl and rr must be None (or ignored).
+Compute total_rounds = 2 * (ra + rb).
+Defaults: first_round=1, last_round=total_rounds.
+Assert 1 <= first_round <= last_round <= total_rounds.
+include_w0 defaults to first_round == 1.
+include_w1 defaults to last_round == total_rounds.
+Then instead of the rigid block structure, we iterate rounds:
+
+node = cipher.IN
+if include_w0:
+    node = cipher.add_subcipher(rk_xor(w0_int), ...)
+
+for r in range(first_round, last_round + 1):
+    if 1 <= r <= ra:
+        # fwd outer
+        idx = r - 1
+        node = cipher.add_subcipher(fwd_round, ...)
+        cipher.nodes[node].nodes[fwd_rk].const = rk_int[idx]
+        cipher.nodes[node].nodes[fwd_rc].const = rc_int[idx]
+    elif ra + 1 <= r <= ra + rb:
+        # fwd inner
+        idx = r - 1
+        node = cipher.add_subcipher(fwd_round, ...)
+        cipher.nodes[node].nodes[fwd_rk].const = rk_int[idx]
+        cipher.nodes[node].nodes[fwd_rc].const = rc_int[idx]
+    elif ra + rb + 1 <= r <= ra + 2*rb:
+        # bwd inner
+        idx = r - (ra + rb + 1)
+        node = cipher.add_subcipher(bwd_round, ...)
+        cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[idx]
+        cipher.nodes[node].nodes[bwd_rk].const = rk_int[idx]
+    else:
+        # bwd outer
+        idx = r - (ra + rb + 1)
+        node = cipher.add_subcipher(bwd_round, ...)
+        cipher.nodes[node].nodes[bwd_rc].const = rc_prime_int[idx]
+        cipher.nodes[node].nodes[bwd_rk].const = rk_int[idx]
+    
+    # insert middle stages between rounds
+    if r == ra and r < last_round:
+        node = middle_stage(cipher, node, h0_int, "h0")
+        node = cipher.add_subcipher(perm, ...)
+    elif r == ra + rb and r < last_round:
+        node = middle_stage(cipher, node, h_xor_int, "hxor")
+        node = cipher.add_subcipher(subcells, ...)
+    elif r == ra + 2*rb and r < last_round:
+        node = cipher.add_subcipher(inv_perm, ...)
+        node = cipher.add_subcipher(rk_xor(h1_int), ...)
+        node = cipher.add_subcipher(mixcolumns, ...)
+        node = cipher.add_subcipher(subcells, ...)
+
+if include_w1:
+    node = cipher.add_subcipher(rk_xor(w1_int), ...)
+cipher.add_output(...)
+Wait, but we need to be careful: the middle_stage helper adds S, M, AK. But the h0 stage in the full cipher is followed by P. The hxor stage in the full cipher is followed by S. The h1 stage is P^{-1}, AK, M, S. In the existing code:
+
+# middle: S, M, AK(h0), P
+node = middle_stage(..., h0_int, ...)
+node = cipher.add_subcipher(perm, ...)
+
+# middle: S, M, AK(h0^h1), S
+node = middle_stage(..., h_xor_int, ...)
+node = cipher.add_subcipher(subcells, ...)
+
+# middle: P^-1, AK(h1), M, S
+node = cipher.add_subcipher(inv_perm, ...)
+node = cipher.add_subcipher(rk_xor(h1_int), ...)
+node = cipher.add_subcipher(mixcolumns, ...)
+node = cipher.add_subcipher(subcells, ...)
+So my logic above matches.
+
+But wait - if the slice starts at round first_round > 1, the first operation applied to node is a round (FwdRound or BwdRound depending on where we are). The input node is cipher.IN (or w0-whitened input). This means the slice assumes the state at the beginning of first_round is the plaintext. That is exactly what the user wants for trail analysis.
+
+Similarly, if the slice ends at last_round < total_rounds, the last operation is the round function for last_round, and then we optionally add w1 or just output.
+
+One more detail: include_w0 and include_w1 should be user-overridable booleans. If the user passes first_round=1, last_round=10, include_w0=False, they get the 10-round core without whitening. This is useful.
+
+I should also update the docstring with examples showing how to slice.
+
+Let me write the replacement code for __init__. Actually, the file is large. I'll keep most of it and replace the assembly section (lines 587-648).
+
+Wait, I also need to ensure the existing rl/rr code path is preserved exactly. So I'll wrap the old assembly logic in an if first_round is None: block, and put the new logic in else:.
+
+Also, there is an assertion about rl + rr <= ra + rb that should stay in the old path.
+
+Let me verify the round numbering for 128-bit variants:
+
+Blink-128a: ra=3, rb=3. Total rounds = 12.
+Blink-128A: ra=3, rb=5. Total rounds = 16.
+The formula total_rounds = 2 * (ra + rb) is correct.
+
+Edge case: what if first_round == last_round? Then we do exactly one round, and no middle stages (since r < last_round is false). That works.
+
+Another edge case: first_round=ra, last_round=ra+1. Then:
+
+r=ra: fwd outer (if ra==ra) or fwd inner? Let's check. r <= ra means fwd outer. So for r=ra, it's the last fwd outer round. Then since r == ra and r < last_round (ra < ra+1), we insert h0. Then r=ra+1: fwd inner (since ra+1 <= r <= ra+rb). Correct.
+What about first_round=ra+rb, last_round=ra+rb+1?
+
+r=ra+rb: fwd inner (last fwd inner). Then since r == ra+rb and r < last_round, insert hxor. Then r=ra+rb+1: bwd inner (first bwd inner). Correct.
+What about first_round=ra+2*rb, last_round=ra+2*rb+1?
+
+r=ra+2rb: bwd inner (last bwd inner). Then since r == ra+2*rb and r < last_round, insert h1. Then r=ra+2rb+1: bwd outer (first bwd outer). Correct.
+All good.
+
+Now I need to write the code.
+
+One thing: bwd_round uses inv_perm first, then rk_xor, then mixcolumns, then subcells. In the existing code, bwd_rc is the constant XOR and bwd_rk is the key XOR. The order inside bwd_round is:
+
+inv_perm
+bwd_rc (constant)
+bwd_rk (key)
+mixcolumns
+subcells
+But the reference backward round is S, M, AK, AC, P^{-1}. Wait, encrypt in reference does:
+
+self.inv_permutation(state)
+self.add_round_constant(state, self.round_const_prime[r])
+self.add_round_key(state, rk[r])
+self.mix_columns(state)
+self.sub_bytes(state)
+This corresponds to S ◦ M ◦ AK ◦ AC ◦ P^{-1}. Since S and M are involutions, this is S ◦ M ◦ AK ◦ AC ◦ P^{-1}. But R^{-1} = S^{-1} ◦ M^{-1} ◦ AK^{-1} ◦ AC^{-1} ◦ P^{-1} = S ◦ M ◦ AK ◦ AC ◦ P^{-1}. So the encrypt function's backward loops are applying R^{-1}. Correct.
+
+In the CiVerLy bwd_round, the order is:
+
+inv_perm
+bwd_rc (AC)
+bwd_rk (AK)
+mixcolumns (M)
+subcells (S) This is S ◦ M ◦ AK ◦ AC ◦ P^{-1}. Correct.
+For backward rounds, key indexing:
+
+bwd inner in reference: rk[r] for r in range(rb). In the slice logic, idx = r - (ra + rb + 1). For r = ra+rb+1 (first bwd inner), idx = 0. Correct.
+bwd outer in reference: rk[r + rb] for r in range(ra). In the slice logic, idx = r - (ra + rb + 1). For r = ra+2*rb+1 (first bwd outer), idx = rb. Correct.
+Constants:
+
+bwd inner: rc_prime_int[idx] where idx = r - (ra + rb + 1). For first bwd inner (r=ra+rb+1), idx=0. Reference uses rc_prime[r] with r=0. Correct.
+bwd outer: rc_prime_int[idx] where idx = r - (ra + rb + 1). For first bwd outer (r=ra+2*rb+1), idx=rb. Reference uses rc_prime[r + rb] with r=0, so rc_prime[rb]. Correct.
+Wait, in the reference:
+
+for r in range(self.ra):
+    self.inv_permutation(state)
+    self.add_round_constant(state, self.round_const_prime[r + self.rb])
+    self.add_round_key(state, rk[r + self.rb])
+    self.mix_columns(state)
+    self.sub_bytes
+
+I will now modify the BLINK_CVL constructor to support slicing by round numbers. This enables constructing partial ciphers that correspond to specific round ranges (e.g., the Superbox experiments in the paper) while keeping the existing rl/rr interface intact for backward compatibility.
+
+The changes will:
+
+Add first_round, last_round, include_w0, and include_w1 parameters.
+When first_round is provided, build the cipher by iterating round-by-round with correct key/constant indexing from the full schedule.
+Keep the original rl/rr code path exactly as before.
+Update the docstring with an example of slicing.
+
+... (code edits and doctest testing)
+
+I've updated BLINK_CVL to support fine-grained slicing of the cipher construction.
+
+What changed
+New slicing parameters in BLINK_CVL.__init__:
+first_round – 1-based index of the first round to include.
+last_round – 1-based index of the last round to include.
+include_w0 / include_w1 – booleans to toggle the initial/final whitening (default sensibly based on slice boundaries).
+Round numbering (for the default Blink-64 variant with ra=2, rb=3):
+Rounds 1–2: outer forward block (rk[0], rk[1])
+Rounds 3–5: inner forward block (rk[2], rk[3], rk[4])
+Rounds 6–8: inner backward block (rk[0], rk[1], rk[2])
+Rounds 9–10: outer backward block (rk[3], rk[4])
+Middle stages are inserted automatically when the slice crosses them:
+h0 between rounds 2 and 3
+hxor between rounds 5 and 6
+h1 between rounds 8 and 9
+Backward compatibility: when first_round is not provided, the existing rl/rr reduced-round logic is used unchanged.
+Usage examples
+from civerly.cipher_implementations.blink import BLINK_CVL
+
+# Full 10-round Blink-64 (legacy style)
+full = BLINK_CVL(64, 64)
+
+# Reduced-round variant (legacy style)
+reduced = BLINK_CVL(64, 64, rl=1, rr=1)
+
+# 4-round core used in the Round 3–4 + Round 5–6 Superbox experiments
+core = BLINK_CVL(64, 64, first_round=3, last_round=6)
+
+# 10-round core without whitening (differential trail analysis)
+trail = BLINK_CVL(64, 64, first_round=1, last_round=10,
+                  include_w0=False, include_w1=False)
+All existing test vectors and doctests continue to pass, and the new sliced constructors are is_valid-verified.
+
+
