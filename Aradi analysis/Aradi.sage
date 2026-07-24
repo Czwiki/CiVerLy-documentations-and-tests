@@ -11,3 +11,4 @@ model_options = MODEL_OPTIONS(cryptanalysis=CRYPTANALYSIS.DIFFERENTIAL, optimiza
 aradi.analyse(model_options)
 aradi.generate_report(model_options)
 #results, objective = solver.process_solution_file(output_file)
+x
