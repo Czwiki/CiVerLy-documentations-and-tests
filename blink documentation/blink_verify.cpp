@@ -41,7 +41,7 @@
 // 1. VARIANT SELECTION  (uncomment exactly one)
 // ============================================================================
 
-#define BLINK_64A
+ #define BLINK_64A
 // #define BLINK_64B
 // #define BLINK_128A
 // #define BLINK_128B
@@ -352,21 +352,31 @@ uint8_t TWEAK[TWEAK_BYTES] = {
 // (if NUM_KEYS > FIXED_KEYS_COUNT) are generated randomly.
 // ============================================================================
 #define NUM_KEYS    1
-#define NUM_TRIALS  1000000000
+#define NUM_TWEAKS  1
+#define NUM_TRIALS  10000
 
 // Uncomment the line below to skip the whitening steps (w[0] and w[1]).
 // This matches tools that do not model key additions.
- #define SKIP_WHITENING
+// #define SKIP_WHITENING
 
 // Uncomment the block below (and keep USE_FIXED_KEYS defined) to test specific keys.
- #define USE_FIXED_KEYS
-// #ifdef USE_FIXED_KEYS
- constexpr int FIXED_KEYS_COUNT = 1;
- uint8_t FIXED_KEYS[FIXED_KEYS_COUNT][KEY_BYTES] = {
-     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}   // example key
- };
-// #endif
+// #define USE_FIXED_KEYS
+#ifdef USE_FIXED_KEYS
+constexpr int FIXED_KEYS_COUNT = 1;
+uint8_t FIXED_KEYS[FIXED_KEYS_COUNT][KEY_BYTES] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}   // example key
+};
+#endif
+
+// Uncomment the block below (and keep USE_FIXED_TWEAKS defined) to test specific tweaks.
+// #define USE_FIXED_TWEAKS
+#ifdef USE_FIXED_TWEAKS
+constexpr int FIXED_TWEAKS_COUNT = 1;
+uint8_t FIXED_TWEAKS[FIXED_TWEAKS_COUNT][TWEAK_BYTES] = {
+    {0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01}   // example tweak
+};
+#endif
 
 // ============================================================================
 // 5. DIFFERENTIAL CHARACTERISTIC
@@ -374,8 +384,8 @@ uint8_t TWEAK[TWEAK_BYTES] = {
 // Enter the input and output differences for the selected round slice here.
 // Each array has length STATE_BYTES.
 // ============================================================================
-uint8_t DELTA_IN[STATE_BYTES]  = {0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};   // <-- EDIT: input difference (hex bytes)
-uint8_t DELTA_OUT[STATE_BYTES] = {0x00, 0xcc, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x00};   // <-- EDIT: expected output difference (hex bytes)
+uint8_t DELTA_IN[STATE_BYTES]  = {0};   // <-- EDIT: input difference (hex bytes)
+uint8_t DELTA_OUT[STATE_BYTES] = {0};   // <-- EDIT: expected output difference (hex bytes)
 
 // ============================================================================
 // Derived constants
@@ -749,8 +759,9 @@ int main() {
     std::cout << " Differential Characteristic Experiment" << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Keys        : " << NUM_KEYS << std::endl;
+    std::cout << "Tweaks      : " << NUM_TWEAKS << std::endl;
     std::cout << "Trials/key  : " << NUM_TRIALS << std::endl;
-    std::cout << "Total runs  : " << static_cast<uint64_t>(NUM_KEYS) * NUM_TRIALS << std::endl;
+    std::cout << "Total runs  : " << (static_cast<uint64_t>(NUM_KEYS) * NUM_TWEAKS * NUM_TRIALS) << std::endl;
     std::cout << "Delta IN    : ";
     print_state(DELTA_IN);
     std::cout << "Delta OUT   : ";
@@ -785,37 +796,61 @@ int main() {
         }
 #endif
 
-        GenerateRoundKey(trial_key, TWEAK, rk, w, h);
+        for (int tweak_idx = 0; tweak_idx < NUM_TWEAKS; ++tweak_idx) {
+            uint8_t trial_tweak[TWEAK_BYTES];
 
-        for (int trial = 0; trial < NUM_TRIALS; ++trial) {
-            // Random plaintext
-            uint8_t trial_plain[STATE_BYTES];
-            for (int i = 0; i < STATE_BYTES; i++) {
-                trial_plain[i] = static_cast<uint8_t>(dis(gen));
-            }
-
-            uint8_t s1[STATE_BYTES];
-            uint8_t s2[STATE_BYTES];
-            std::memcpy(s1, trial_plain, STATE_BYTES);
-            std::memcpy(s2, trial_plain, STATE_BYTES);
-            for (int i = 0; i < STATE_BYTES; i++) {
-                s2[i] ^= DELTA_IN[i];
-            }
-
-            apply_round_slice(s1, rk, w, h, FIRST_ROUND, LAST_ROUND);
-            apply_round_slice(s2, rk, w, h, FIRST_ROUND, LAST_ROUND);
-
-            bool match = true;
-            for (int i = 0; i < STATE_BYTES; i++) {
-                if ((s1[i] ^ s2[i]) != DELTA_OUT[i]) {
-                    match = false;
-                    break;
+#ifdef USE_FIXED_TWEAKS
+            if (tweak_idx < FIXED_TWEAKS_COUNT) {
+                for (int i = 0; i < TWEAK_BYTES; i++) {
+                    trial_tweak[i] = FIXED_TWEAKS[tweak_idx][i];
                 }
+                std::cout << "  [Tweak " << (tweak_idx + 1) << "/" << NUM_TWEAKS << "] FIXED" << std::endl;
+            } else {
+                for (int i = 0; i < TWEAK_BYTES; i++) {
+                    trial_tweak[i] = static_cast<uint8_t>(dis(gen));
+                }
+                std::cout << "  [Tweak " << (tweak_idx + 1) << "/" << NUM_TWEAKS << "] RANDOM" << std::endl;
             }
-            if (match) {
-                ++success;
+#else
+            for (int i = 0; i < TWEAK_BYTES; i++) {
+                trial_tweak[i] = static_cast<uint8_t>(dis(gen));
+                // Or use the predefined test vector:
+                // trial_tweak[i] = TWEAK[i];
             }
-            ++total_runs;
+#endif
+
+            GenerateRoundKey(trial_key, trial_tweak, rk, w, h);
+
+            for (int trial = 0; trial < NUM_TRIALS; ++trial) {
+                // Random plaintext
+                uint8_t trial_plain[STATE_BYTES];
+                for (int i = 0; i < STATE_BYTES; i++) {
+                    trial_plain[i] = static_cast<uint8_t>(dis(gen));
+                }
+
+                uint8_t s1[STATE_BYTES];
+                uint8_t s2[STATE_BYTES];
+                std::memcpy(s1, trial_plain, STATE_BYTES);
+                std::memcpy(s2, trial_plain, STATE_BYTES);
+                for (int i = 0; i < STATE_BYTES; i++) {
+                    s2[i] ^= DELTA_IN[i];
+                }
+
+                apply_round_slice(s1, rk, w, h, FIRST_ROUND, LAST_ROUND);
+                apply_round_slice(s2, rk, w, h, FIRST_ROUND, LAST_ROUND);
+
+                bool match = true;
+                for (int i = 0; i < STATE_BYTES; i++) {
+                    if ((s1[i] ^ s2[i]) != DELTA_OUT[i]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    ++success;
+                }
+                ++total_runs;
+            }
         }
 
         if ((key_idx + 1) % 1 == 0 || key_idx == NUM_KEYS - 1) {
