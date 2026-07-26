@@ -353,14 +353,15 @@ uint8_t TWEAK[TWEAK_BYTES] = {
 // ============================================================================
 #define NUM_KEYS    1
 #define NUM_TWEAKS  1
-#define NUM_TRIALS  10000
+#define NUM_TRIALS  4294967296
+
 
 // Uncomment the line below to skip the whitening steps (w[0] and w[1]).
 // This matches tools that do not model key additions.
-// #define SKIP_WHITENING
+#define SKIP_WHITENING
 
 // Uncomment the block below (and keep USE_FIXED_KEYS defined) to test specific keys.
-// #define USE_FIXED_KEYS
+#define USE_FIXED_KEYS
 #ifdef USE_FIXED_KEYS
 constexpr int FIXED_KEYS_COUNT = 1;
 uint8_t FIXED_KEYS[FIXED_KEYS_COUNT][KEY_BYTES] = {
@@ -370,11 +371,11 @@ uint8_t FIXED_KEYS[FIXED_KEYS_COUNT][KEY_BYTES] = {
 #endif
 
 // Uncomment the block below (and keep USE_FIXED_TWEAKS defined) to test specific tweaks.
-// #define USE_FIXED_TWEAKS
+#define USE_FIXED_TWEAKS
 #ifdef USE_FIXED_TWEAKS
 constexpr int FIXED_TWEAKS_COUNT = 1;
 uint8_t FIXED_TWEAKS[FIXED_TWEAKS_COUNT][TWEAK_BYTES] = {
-    {0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01}   // example tweak
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}   // example tweak
 };
 #endif
 
@@ -384,8 +385,8 @@ uint8_t FIXED_TWEAKS[FIXED_TWEAKS_COUNT][TWEAK_BYTES] = {
 // Enter the input and output differences for the selected round slice here.
 // Each array has length STATE_BYTES.
 // ============================================================================
-uint8_t DELTA_IN[STATE_BYTES]  = {0};   // <-- EDIT: input difference (hex bytes)
-uint8_t DELTA_OUT[STATE_BYTES] = {0};   // <-- EDIT: expected output difference (hex bytes)
+uint8_t DELTA_IN[STATE_BYTES]  = {0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};   // <-- EDIT: input difference (hex bytes)
+uint8_t DELTA_OUT[STATE_BYTES] = {0x00, 0xcc, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x00};   // <-- EDIT: expected output difference (hex bytes)
 
 // ============================================================================
 // Derived constants
