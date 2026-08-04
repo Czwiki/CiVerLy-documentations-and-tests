@@ -1,0 +1,60 @@
+Key: e06edc9ab7f0b1371868b8e57a9c3f14b4e3be856d4484911bd1ecd6dab8373d
+Pairs tested : 10000000
+Hits         : 8
+Probability  : 8e-07
+Weight (log2): -20.253496664211536
+Key: 355be8ab90118489c9be92259cf24f078951af42552b10f7c2f3f77199a0f68a
+Pairs tested : 10000000
+Hits         : 5
+Probability  : 5e-07
+Weight (log2): -20.931568569324174
+Key: 51a8e7f9fd421ac0ccadcc1b9392fdd2ec5ec14ec1c66de59a7a809ec1c6abf4
+Pairs tested : 10000000
+Hits         : 19
+Probability  : 1.9e-06
+Weight (log2): -19.00556915076795
+Key: 37eebd28507d9c4f2aff237e1cf05c2feb08b6790a8fb02f69b71ea3d3c1acd9
+Pairs tested : 10000000
+Hits         : 7
+Probability  : 7e-07
+Weight (log2): -20.446141742153934
+Key: c2ed6410bea120a39e59ef17f0ea4a6c1e3d4d35c38bec6e39a8fd82b20a999d
+Pairs tested : 10000000
+Hits         : 10
+Probability  : 1e-06
+Weight (log2): -19.931568569324174
+Key: e7095235879bf26add57241e8af891ac20658650fe3075682ff38e5b9295b151
+Pairs tested : 10000000
+Hits         : 13
+Probability  : 1.3e-06
+Weight (log2): -19.553056946070445
+Key: 1690302ea779c09b2c8efa5f84feaedc0c16c5c0f87d5050dab5d6d9239b234b
+Pairs tested : 10000000
+Hits         : 19
+Probability  : 1.9e-06
+Weight (log2): -19.00556915076795
+Key: f4d1a31a31dec9b1dee14b36c98c31836ac80e30f18121dd6228290d38d1b67a
+Pairs tested : 10000000
+Hits         : 12
+Probability  : 1.2e-06
+Weight (log2): -19.66853416349038
+Key: fba4da00d916a519b7c3424bd1dca11412095fb89fcfdabb92b370d05f24f2f0
+Pairs tested : 10000000
+Hits         : 4
+Probability  : 4e-07
+Weight (log2): -21.253496664211536
+Key: 528bbb3ca6681ea109fcfebacc93227c6a1519b7b16ae10e64697ace750203f5
+Pairs tested : 10000000
+Hits         : 3
+Probability  : 3e-07
+Weight (log2): -21.66853416349038
+Key: f5dd5f228e78cdcf00f5e62483c03a93989bfa41cf7426c8bc860505f072433a
+Pairs tested : 10000000
+Hits         : 10
+Probability  : 1e-06
+Weight (log2): -19.931568569324174
+Key: dbb01709303ed2e9b2af819e8da21204dc8d8f86e13df03986e3993f128b2ad0
+Pairs tested : 10000000
+Hits         : 14
+Probability  : 1.4e-06
+Weight 
