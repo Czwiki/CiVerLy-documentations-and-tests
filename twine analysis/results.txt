@@ -1,0 +1,358 @@
+1016 variables and 2441 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : SAT
+[  0 ,  3] (trying w =   1) : SAT
+[  0 ,  1] (trying w =   0) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+1776 variables and 4497 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : SAT
+[  0 ,  3] (trying w =   1) : UNSAT
+[  2 ,  3] (trying w =   2) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+2536 variables and 6553 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : UNSAT
+[  4 ,  6] (trying w =   5) : SAT
+[  4 ,  5] (trying w =   4) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+3296 variables and 8609 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : UNSAT
+[  4 ,  6] (trying w =   5) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+4056 variables and 10665 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : UNSAT
+[  7 , 12] (trying w =   9) : SAT
+[  7 ,  9] (trying w =   8) : SAT
+[  7 ,  8] (trying w =   7) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+4816 variables and 12721 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : UNSAT
+[  7 , 12] (trying w =   9) : UNSAT
+[ 10 , 12] (trying w =  11) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+5576 variables and 14777 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : UNSAT
+[ 13 , 25] (trying w =  19) : SAT
+[ 13 , 19] (trying w =  16) : SAT
+[ 13 , 16] (trying w =  14) : UNSAT
+[ 15 , 16] (trying w =  15) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+6336 variables and 16833 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : UNSAT
+[ 13 , 25] (trying w =  19) : UNSAT
+[ 20 , 25] (trying w =  22) : SAT
+[ 20 , 22] (trying w =  21) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+7096 variables and 18889 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : SAT
+[ 26 , 38] (trying w =  32) : SAT
+[ 26 , 32] (trying w =  29) : SAT
+[ 26 , 29] (trying w =  27) : UNSAT
+[ 28 , 29] (trying w =  28) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+7856 variables and 20945 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : SAT
+[ 26 , 38] (trying w =  32) : UNSAT
+[ 33 , 38] (trying w =  35) : UNSAT
+[ 36 , 38] (trying w =  37) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+8616 variables and 23001 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : UNSAT
+[ 39 , 50] (trying w =  44) : UNSAT
+[ 45 , 50] (trying w =  47) : SAT
+[ 45 , 47] (trying w =  46) : SAT
+[ 45 , 46] (trying w =  45) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+9376 variables and 25057 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : UNSAT
+[ 51 ,100] (trying w =  75) : SAT
+[ 51 , 75] (trying w =  63) : SAT
+[ 51 , 63] (trying w =  57) : SAT
+[ 51 , 57] (trying w =  54) : SAT
+[ 51 , 54] (trying w =  52) : SAT
+[ 51 , 52] (trying w =  51) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+10136 variables and 27113 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : UNSAT
+[ 51 ,100] (trying w =  75) : SAT
+[ 51 , 75] (trying w =  63) : SAT
+[ 51 , 63] (trying w =  57) : UNSAT
+[ 58 , 63] (trying w =  60) : SAT
+[ 58 , 60] (trying w =  59) : SAT
+[ 58 , 59] (trying w =  58) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+10896 variables and 29169 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : UNSAT
+[ 51 ,100] (trying w =  75) : SAT
+[ 51 , 75] (trying w =  63) : UNSAT
+[ 64 , 75] (trying w =  69) : SAT
+[ 64 , 69] (trying w =  66) : SAT
+[ 64 , 66] (trying w =  65) : SAT
+[ 64 , 65] (trying w =  64) : SAT
+Output file in: temp/TWINE.pdf
+
+
+ Differential Times:
+Time taken for 1 rounds: 0.88 seconds
+Time taken for 2 rounds: 1.93 seconds
+Time taken for 3 rounds: 3.70 seconds
+Time taken for 4 rounds: 5.15 seconds
+Time taken for 5 rounds: 7.42 seconds
+Time taken for 6 rounds: 9.37 seconds
+Time taken for 7 rounds: 13.46 seconds
+Time taken for 8 rounds: 19.63 seconds
+Time taken for 9 rounds: 33.93 seconds
+Time taken for 10 rounds: 88.95 seconds
+Time taken for 11 rounds: 328.01 seconds
+Time taken for 12 rounds: 451.17 seconds
+Time taken for 13 rounds: 1734.93 seconds
+Time taken for 14 rounds: 4534.31 seconds
+1016 variables and 2457 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : SAT
+[  0 ,  3] (trying w =   1) : SAT
+[  0 ,  1] (trying w =   0) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+1776 variables and 4529 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : SAT
+[  0 ,  3] (trying w =   1) : SAT
+[  0 ,  1] (trying w =   0) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+2536 variables and 6601 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : SAT
+[  0 ,  3] (trying w =   1) : UNSAT
+[  2 ,  3] (trying w =   2) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+3296 variables and 8673 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : SAT
+[  0 ,  3] (trying w =   1) : UNSAT
+[  2 ,  3] (trying w =   2) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+4056 variables and 10745 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : UNSAT
+[  4 ,  6] (trying w =   5) : SAT
+[  4 ,  5] (trying w =   4) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+4816 variables and 12817 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : SAT
+[  0 ,  6] (trying w =   3) : UNSAT
+[  4 ,  6] (trying w =   5) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+5576 variables and 14889 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : UNSAT
+[  7 , 12] (trying w =   9) : SAT
+[  7 ,  9] (trying w =   8) : SAT
+[  7 ,  8] (trying w =   7) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+6336 variables and 16961 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : SAT
+[  0 , 12] (trying w =   6) : UNSAT
+[  7 , 12] (trying w =   9) : UNSAT
+[ 10 , 12] (trying w =  11) : SAT
+[ 10 , 11] (trying w =  10) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+7096 variables and 19033 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : UNSAT
+[ 13 , 25] (trying w =  19) : SAT
+[ 13 , 19] (trying w =  16) : SAT
+[ 13 , 16] (trying w =  14) : SAT
+[ 13 , 14] (trying w =  13) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+7856 variables and 21105 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : UNSAT
+[ 13 , 25] (trying w =  19) : SAT
+[ 13 , 19] (trying w =  16) : UNSAT
+[ 17 , 19] (trying w =  18) : SAT
+[ 17 , 18] (trying w =  17) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+8616 variables and 23177 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : UNSAT
+[ 13 , 25] (trying w =  19) : UNSAT
+[ 20 , 25] (trying w =  22) : SAT
+[ 20 , 22] (trying w =  21) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+9376 variables and 25249 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : UNSAT
+[ 13 , 25] (trying w =  19) : UNSAT
+[ 20 , 25] (trying w =  22) : UNSAT
+[ 23 , 25] (trying w =  24) : SAT
+[ 23 , 24] (trying w =  23) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+10136 variables and 27321 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : SAT
+[ 26 , 38] (trying w =  32) : SAT
+[ 26 , 32] (trying w =  29) : SAT
+[ 26 , 29] (trying w =  27) : SAT
+[ 26 , 27] (trying w =  26) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+10896 variables and 29393 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : SAT
+[ 26 , 38] (trying w =  32) : SAT
+[ 26 , 32] (trying w =  29) : UNSAT
+[ 30 , 32] (trying w =  31) : SAT
+[ 30 , 31] (trying w =  30) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+11656 variables and 31465 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : SAT
+[ 26 , 38] (trying w =  32) : SAT
+[ 26 , 32] (trying w =  29) : UNSAT
+[ 30 , 32] (trying w =  31) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+12416 variables and 33537 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : SAT
+[ 26 , 38] (trying w =  32) : UNSAT
+[ 33 , 38] (trying w =  35) : SAT
+[ 33 , 35] (trying w =  34) : UNSAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+13176 variables and 35609 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : SAT
+[ 26 , 38] (trying w =  32) : UNSAT
+[ 33 , 38] (trying w =  35) : UNSAT
+[ 36 , 38] (trying w =  37) : SAT
+[ 36 , 37] (trying w =  36) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+13936 variables and 37681 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : UNSAT
+[ 39 , 50] (trying w =  44) : SAT
+[ 39 , 44] (trying w =  41) : SAT
+[ 39 , 41] (trying w =  40) : SAT
+[ 39 , 40] (trying w =  39) : SAT
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-811bdaa8_out.pla, make sure it is up to date!
+14696 variables and 39753 clauses were written to 'temp/TWINE.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : UNSAT
+[ 26 , 50] (trying w =  38) : UNSAT
+[ 39 , 50] (trying w =  44) : SAT
+[ 39 , 44] (trying w =  41) : SAT
+[ 39 , 41] (trying w =  40) : UNSAT
+Output file in: temp/TWINE.pdf
+
+
+ Linear Times:
+Time taken for 1 rounds: 1.07 seconds
+Time taken for 2 rounds: 2.01 seconds
+Time taken for 3 rounds: 3.49 seconds
+Time taken for 4 rounds: 5.19 seconds
+Time taken for 5 rounds: 6.63 seconds
+Time taken for 6 rounds: 8.03 seconds
+Time taken for 7 rounds: 10.66 seconds
+Time taken for 8 rounds: 14.20 seconds
+Time taken for 9 rounds: 19.53 seconds
+Time taken for 10 rounds: 29.91 seconds
+Time taken for 11 rounds: 76.86 seconds
+Time taken for 12 rounds: 144.49 seconds
+Time taken for 13 rounds: 247.53 seconds
+Time taken for 14 rounds: 389.41 seconds
+Time taken for 15 rounds: 434.45 seconds
+Time taken for 16 rounds: 747.23 seconds
+Time taken for 17 rounds: 751.63 seconds
+Time taken for 18 rounds: 991.74 seconds
+Time taken for 19 rounds: 1586.06 seconds

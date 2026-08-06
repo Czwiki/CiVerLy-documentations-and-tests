@@ -1,0 +1,504 @@
+Key: cbb2cf26dd69cd1c1957b6290534e025fd2348f5f9c611e3a5b44c6ecc118709
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 36bab8e7cf99b89c2beb77277ee71d09e85bd7d47490c2cd2cb51cdf2b1c91d8
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 8001f0d089cf602dfdc36ee9322e290c3d17ac20f57f7e6cf6435ac5a678b820
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 99bceb9667669dea9c05d88f6064d282959b4fc73b3b39a06a8c5c43cff0938b
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 501e1ec4aadc7b41a9967626334c19fcc146023d825cce97b9b82e919cc7dd5a
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 6720c176d630b06e412902cb1a7ffece5eea9b0a52cbcea4263851d4d676f8f9
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: e68c245f101b61254954773a04115be8406b70f7c51f1d4b6384dc64f41b3bdf
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 0ebd804356067bc77d6bfcbd775db25ca85663c61e0ca14e8ac40398bec3406f
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 30c8a52b27b705d9e8d0f5cda0b8d27bb8679cf6ee2dd4e304cad40045856b7b
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 35efa547414b7cca585a0a9f1a0152ac1a691c583ec3025e6d1f556e59622803
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 55344864907a036d7791ac277bf4c98cf7439fb94240c1d5c705f2c7ac7e4271
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 55ef54bf2267cbe6aa17aca6c2cc27d7383d2ea4f3a2e3d3dc6a52e132fbf377
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: ed8b552c79e5067cbb480ca487166e059d35b9db7a75ed45853521f5b9f530ee
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: cbd2b7683633e1718bf0342131c0266a8d612aa858ffa3ba0e793bb77e10ab22
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: c83c136a5c2f5c8fed2eafc45d2846048145b763c4652044cda391fd18c44bdd
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3fc106550531f7614596eebbc2d3bcc7998ecf7a5b4db20d1d92d283036002c8
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: abacd816a39b61f2829c78e546ce88ece30ba88b9920f3ecd841624b91cff6d4
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3d4614fdadf67bbf1cd1e81bcb9fae9ed7b2db3bbf4a26dd3754f173a0243336
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: da22636c5f81502d2dbc0c02e718f051626514b9cf202c0ea43e60573909c946
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: e5c12868f483defaa4e18f7b2acb5b77a7d1ac76e6bca2686057f21049eabc8d
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 68a908defaeba672f934e0a3610b96906b9de6ccab111db443466baa42917552
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 1cb8a1ada58b4500bf3b50dd985aa36ca3ec989db5274ff72817aec7f761b075
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: a4072c5a0eb5873f568fbb49680d7ba1b93b6849fdf81118c5c37211608108c2
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3f63639d21a676b8003966b4fb331f99077b84088a53ca7313bbf926aadc72a9
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 89f6ad893175ae4b8908b989db2e1d00007f10d0f4cea75603e0b6e8af6af448
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 410bf3235e5f3ef3c9fe71524a0be86ef5795e797bd58fadb892715bb12297de
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3b7de3c89cb50fd7c8ce1898bc1d33a22bbd7de75ceb9cab00aa3d9c45c08a5f
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: a982cbcf6ca5d26b92e433411326d424acf75dfdfddc7b5c23c5d55149a667ac
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 875048dbe67ebb7b2badd2bca4c83eb9117bcc0d840f0d423adad93fca3071b7
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: a3faa25eb7aeffc94bd3ed6d9c320c32c89e4c71de421ce463e4ef344a82f76f
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: c617d9c74bb8346aaa4bb0b667541e1e8d10e55cf1c79d1c741287b3c792de43
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 67b0e0fa8e25af7619949d95dbb2c7c00de01fed89c9306fa561d51f4d6b417c
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: d048715b6089b5a07db2ee2940400e4479561be63c7f9a49f2315d09e810a9e4
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 0228a410251211ccce650132ed936d14b9361f77484be8d14bcead28320c912a
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 1a9fefe453b11c0aea00d0149c1834d0bc8e9ee902ced4c9fbe66d68d8e4fb93
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 79e44ec19b5c4341ef153db083bce6cdce51b0ad0ebc8d4e5693d8e519eb0a5b
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 889223af4e2b1f434af849d74d18b3279d950103aa32c928a226a63f55fc39ba
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: fddfc348fd30f749cbf9cbf1e5c7fb8e34e2173c8ae2943699996b126d8d9d2f
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: e5a45f9f738f8b5daad689e8836a41b799c02d18e84816194e1e9706d6cda6a5
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 37bc91407a5b1b56b5be576b534bf1eef423a2f58ac3b47181ccfb445a649561
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: ab01cbfaa5df765fc8600694996260b409ff39a76d842baaf1801e61d64f76f8
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 1e10076f1e06fedfc163dbc9fe9d429a2606644cfe8a7ecb272cb52f33bda0b2
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3d6d9f15064426f861d6678747d760ad94334993cb9fd0f9da852b24bbbd5d41
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 2f1a2b54abfb2861d591b5b39fa4b5bd141d2d41fff26ab01688c2dacc344f3c
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: f4778b4b433c40dd6a68628591bbbd410c5fba242e8faf1c8d0bfbd623cb69c6
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 349ac6445816636f58a12ef0ec29846abfc722b5d0f56d0f03cbaa92144620d4
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: afb18f4793362b5bd0259bd76a2119a197f0787cb3ee99db5eeec94ff029f5f6
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 62e0e9e468b2816a52aa7db5929532aa7effee2f3926d307cd7be68c4ccbd6fa
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3f35fecd883322af292b835bd2ee66e6622fb06c0bca69cdecfc9d1fa41baebb
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 157a9671684b654808a1ca3196e69eef0776a3be76c911c316b93e897966b371
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: af75a799044673d13b90569b74459b6eadacce08e11c81eb6fe3764c00f188ac
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: ba7a636860d0267ddd427d4ddbf3ef87a91bb82376514c83eb0bf1ed82f81e52
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3d8be8b9c6a968d7233912ede6d61467ce6494e3267e6a824793cc0edbe72aa3
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 29a2f94dd3a926dd006fdd73de3f0405d3d5899e8991098ba357cf9f66857878
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: aad28a410d643e58ba040bc78b61d627a03563db368aa060a78297f713ad5b52
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: e65559ba8c84b1871056bacba331740d15e2558dcaa61d7163af435023901cea
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: fe16ec19404cbdb75d2054cb31097d4c45bfd9dfb445c7c5df7809330bfe8db3
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: abd224754baceb44edd19296a5e5b21af1845cb6539a13f45d15de9f76a0e295
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 2a7d25eef10e64a8f4e6eeb4f6caf61a3cd67f031b298042d85e89df66803fc3
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: f8c5359211b5db2e5fe2d62622155aa3c76373c3ae410a8364c110b3367ef2e0
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: de1ae70af94e0f7237cf41ae8e93c758b3b7ff47dfadf2465b06282ebdef191e
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3df2d33b2a786565a2bdbda9b4b5dbc9a246d3d9044729133f1e1b340f6867b7
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: aef9d3ab0b3991e7f768141a7ea6ff97018a98ec0638691f56c2f3ce8c559267
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 9f3facf2d96559f2e23a5e7e82c76ef0e091a1f397eca7dc49c4fe9bd58e2a60
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: ed119c46fc81634b039831ebfeab18b450f32f918f6a44fb86636422af6dad1b
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3c1f73aba4684a189ba36c2d28bbc3000339d4e3cdead4827bf4a9700cbedb95
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 7d18ede7df5e56d60ed03c006f33b3573ce42e585c010930607cdb38de2601f1
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 0da229e09074161661c53857cd19497bd713aaa1510e2b29ba8432b17ed6de31
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 2fa33cb32895a412d85a886c0a23c911059aa9087223d2067a9c69ad2fa7e9c4
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 4746b8c9431a42170cec7bc450b3a3cb0d6f839582cced018114719610b8ed2b
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 5bee06211e2cad631f65ae5575c5576c563e59be3ab799781554ed18d279afe7
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 9b041116d20dc7b032e1a72009ed5273d030b6156afa60509feac5260e29da8b
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 168b01a6ff027ea2309c8f9647c5af46a8f5728ac350ab3b376f91a8ebd3e5b2
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 78a2c85a9c985a418e32f9aabb52e6890de2e2e91d1be5e52865e163a809a721
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: db23746b8e19a5d58559e4d296bcbee33a27a277c927c3144cbd1c1e0eb5f02b
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 786c3025c22f8ac2371b93ec18be2cd23c9648d426368aada89146e39336675b
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3fcc83215ea4f3f155a78f2f261552bdf5be7774694abba15da34c029a1b050f
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 1110f516b4ab99126da697f33321bb4eb6251a65cba3d46d4bfe37bf4efceaf3
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 1e2be14452ea8d9fa30ac79a7fad9f0511f08e4fc841ed4e54a16713c582996e
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: f4d7f936fa828ba88a68b70499c981269f0317317cd4bfe553e1ecbd6c3f50cd
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 34431cbd48cf3509375a3b9d6fab39bc5ecd79c90143fef2f56fd679b32c85b0
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 21f1dcbc8764df1cd6e54d458cf7276b4c280030ffb6cc0f18da050e5eccf4c4
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 7c26ccc7347f518e11f47f7f8ceaeac0d6d4df4500f524f1da66d2f033d7bae2
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 9fc6d755e5adb3097a9b465bc43d47f4359dff3402c7747aa3fc2e1416c10920
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 08e20f6ff6f433d633c8d312577add483fadcede04b83e71996435f466bf83bd
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 2b8a79d8fe982328c12ee61611863cc5d328cf97faa447b7ede690e68ad56489
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3e9c7d727df5f91f25c6c5337241f37a3ca3957b64cd311e09d2388ee282ce70
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: d21548888ca45c310b8d5c416f730145332211ef575fecf64775d865bf9756ca
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: e7f3a0da4f879eea366c808e0fabd41c0a0a14827404bde8f655f0c3c398385d
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 60e097ce83b52af637031f216dadc5f7a2007f1ad7b8f426af2a170792d0cd8d
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 298fe48561e04c03e0de0d65b68881117b1e16e2c1c2be962df66b4cda0586c8
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 86673dfa2b5e256f1767952d33e2c193c10abdadba01d1b54f8542a80f484b0d
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 8b378113854b37e6d08099bdb3a1cb0cffff187dd1ea6e3d238aafaffc840e46
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 662bc1a433729af12819bfae641437bacfe0f2b134925b21278633a1c71da220
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 3dba2365948a03f68ac6568bb80a229f33b78ad744ff2e6edbe5a4a1b2df48bb
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 851ae814220fa2fad002553a9c579d7042f964e8f606b17512d80605f8ca45d5
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 54b52ba42fb8c8f7ea13cfffc791f7c2938d164ca13c5d4685ed12439a414742
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 506726865c0b48fffe37b5a9ea1b683a037440df4bb04f151068e6b9b862796d
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: 2dc1b204232264f3f6d231cd0b9540e0fcb566d576f156cf2b205c7b9c331d7f
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Key: ab702e5e5d4a584a5f99569ce6bc5136bfd325fe066898eba6d89975575c700b
+Pairs tested : 10000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Pairs tested : 1000000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf

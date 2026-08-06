@@ -1,0 +1,9 @@
+Key: 0000000000000000000000000000000000000000000000000000000000000000
+Pairs tested : 100000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf
+Pairs tested : 100000000
+Hits         : 0
+Probability  : 0.0
+Weight       : -inf

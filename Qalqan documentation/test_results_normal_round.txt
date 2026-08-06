@@ -1,0 +1,54 @@
+Key: 2496d50ba5855a49f864ec09a447f176a6a687b63894e72f1eed4b8aef7197f7
+Pairs tested : 100000000
+Hits         : 48714
+Probability  : 0.00048714
+Weight (log2): -11.00337592904955
+Key: 3c40b0a204427aac09eae1b302fa9663a5f82c470d5e8ab3c1c3714166199402
+Pairs tested : 100000000
+Hits         : 48662
+Probability  : 0.00048662
+Weight (log2): -11.004916763531503
+Key: e960b80519c4de14b2143461bec851c2931bde80cf49bba3fc00cedd7a17722f
+Pairs tested : 100000000
+Hits         : 24637
+Probability  : 0.00024637
+Weight (log2): -11.986885787015956
+Key: 5fcdc0b01331a996297203c1bd81f7b72a7c9cafcc72e931144b11293fd8a287
+Pairs tested : 100000000
+Hits         : 73372
+Probability  : 0.00073372
+Weight (log2): -10.412482768360542
+Key: ccf426830f7605a9ddea79ec5a9298f550fe071d282d035ada65722501177237
+Pairs tested : 100000000
+Hits         : 73238
+Probability  : 0.00073238
+Weight (log2): -10.415119985321338
+Key: a0c682b3b74e695093288c55e6b27fff03aebd8d3cdc7d7d2c065ef44b773f6a
+Pairs tested : 100000000
+Hits         : 24297
+Probability  : 0.00024297
+Weight (log2): -12.006934187212648
+Key: cd52bf7e75287131ffc7a71feae7e0aac2971b5df83486e0e59aae14144be124
+Pairs tested : 100000000
+Hits         : 49008
+Probability  : 0.00049008
+Weight (log2): -10.994695107499941
+Key: aa14ab54eece4f820371942870c4afba7a88b8b3709aacbd7ac60ed3c69d26c4
+Pairs tested : 100000000
+Hits         : 24591
+Probability  : 0.00024591
+Weight (log2): -11.989581975818924
+Key: c9161cfaf790f64947c6dd31a3aaeca083fa1b96c92e4752e067b577d096f30b
+Pairs tested : 100000000
+Hits         : 73394
+Probability  : 0.00073394
+Weight (log2): -10.412050252776044
+Key: 0302dacca945093fdc992e7f3300c57199d32b95d93b858c278e3ff8d6a66f0f
+Pairs tested : 100000000
+Hits         : 72998
+Probability  : 0.00072998
+Weight (log2): -10.419855441989787
+Pairs tested : 1000000000
+Hits         : 512911
+Probability  : 0.000512911
+Weight (log2): -10.929003867553234
