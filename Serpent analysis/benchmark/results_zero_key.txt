@@ -1,0 +1,13 @@
+reference=serpent/floppy1 (unmodified)
+rounds=6-9; key_schedule=all_zero; samples=1000000000; seed=0x6a09e667f3bcc909
+input_difference=400e0000000006006000400600000000
+expected_output_difference=6081641bd04749452745c02c34a507e1
+matches=1
+estimated_probability=1e-09
+
+reference=serpent/floppy1 (unmodified)
+rounds=6-9; key_schedule=all_zero; samples=10000000000; seed=0x6a09e667f3bcc909
+input_difference=400e0000000006006000400600000000
+expected_output_difference=6081641bd04749452745c02c34a507e1
+matches=3
+estimated_probability=3e-10

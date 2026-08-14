@@ -1,0 +1,46 @@
+rounds=6-9; samples_per_key=4294967296; random_keys=20; include_zero_key=0; seed=0x20260809
+input_difference=400e0000000006006000400600000000
+expected_output_difference=6081641bd04749452745c02c34a507e1
+key_index=1; key_type=random_128_bit
+master_key=000000000000000000000000000000019d16d6b785c0c576c6d0d15125303704
+key_matches=1
+key_estimated_probability=2.32830643654e-10
+key_index=2; key_type=random_128_bit
+master_key=000000000000000000000000000000016b39a957ec5bc183291002f49209e581
+key_matches=0
+key_estimated_probability=0
+key_index=3; key_type=random_128_bit
+master_key=000000000000000000000000000000019958cc7e6bc6d5deb24d546cda10b319
+key_matches=1
+key_estimated_probability=2.32830643654e-10
+key_index=4; key_type=random_128_bit
+master_key=000000000000000000000000000000011a628b7ce2e8bcae48d208dd5f304afb
+key_matches=0
+key_estimated_probability=0
+key_index=5; key_type=random_128_bit
+master_key=00000000000000000000000000000001c1ea992a7eb88d3cde4dc1799b13eba3
+key_matches=1
+key_estimated_probability=2.32830643654e-10
+key_index=6; key_type=random_128_bit
+master_key=000000000000000000000000000000015699d49278b41cfec5a156b8e536029b
+key_matches=1
+key_estimated_probability=2.32830643654e-10
+key_index=7; key_type=random_128_bit
+master_key=000000000000000000000000000000015340d84852d30db8a8892077bfc340c3
+key_matches=1
+key_estimated_probability=2.32830643654e-10
+key_index=8; key_type=random_128_bit
+master_key=000000000000000000000000000000018ee8ae3e035e6b8f92fb608764126188
+key_matches=0
+key_estimated_probability=0
+key_index=9; key_type=random_128_bit
+master_key=000000000000000000000000000000012c24b7d8d314861d764a3bdb88a504bf
+key_matches=0
+key_estimated_probability=0
+key_index=10; key_type=random_128_bit
+master_key=000000000000000000000000000000018ab6be5023d742c0f61648d87ace7526
+key_matches=0
+key_estimated_probability=0
+
+5 total_matches
+Probability 2^-33
