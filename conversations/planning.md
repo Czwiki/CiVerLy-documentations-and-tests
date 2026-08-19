@@ -291,3 +291,38 @@ Keeping round constants/keys in a round-indexed list for easy extraction of rang
 Modeling initial/final whitening as separate subciphers so they don't interfere with round-indexed slicing.
 Testing slices by verifying is_valid and matching full-cipher test vectors.
 
+date: 2026-08-19T 18:00:00Z
+participants:
+- You: Henry
+- Assistant: Kilo AI, Kimi 2.7 Code
+topic: "Planning of Implementation"
+
+User:
+It seems like the specifications in @documentation/README.md  are not clear enough on the slicing. Basically, the R argument of the constructor can stay, but it cannot be used togehter with the specification of a start and an end, which must be there together. And please include that the cipher must be slicable, preferably with these start and end parameters. But depending on the structure  cipher, other techniques may be more suitable. As for the key schedule: If possible, it should be included as a class method, but only usable by the constructor or other internal functions. In addition, the specification of a master key in the constructor should be possible. This should mutually exclude the specification of explicit round keys via rks.
+
+User wants me to update the documentation/README.md file to clarify slicing specifications and key schedule requirements. Let me understand the requested changes:
+
+Slicing:
+The R argument of the constructor can stay
+But it cannot be used together with specifying start and end
+start and end must be provided together
+Cipher must be sliceable, preferably with these start and end parameters
+Depending on cipher structure, other techniques may be more suitable
+Key schedule:
+Should be included as a class method
+Only usable by the constructor or other internal functions
+Specification of a master key in the constructor should be possible
+This should mutually exclude the specification of explicit round keys via rks
+I need to edit the README.md file. I've already read it. Let me make the edits in sections 4 (sliceable round construction) and 7 (key schedule strategy), and possibly update section 3 or 9 if needed.
+
+Let me first update section 4 to clarify the slicing requirements.
+
+I will update the slicing and key-schedule guidelines in documentation/README.md to make those requirements explicit.
+
+Updated documentation/README.md with the clarified slicing and key-schedule rules:
+
+Slicing: R and the pair (start, end) are now required to be mutually exclusive, with both start and end accepted together.
+Key schedule: the key schedule should be a class method usable only internally, the constructor should accept master_key, and master_key/rks are mutually exclusive.
+Added the corresponding pitfalls to the checklist.
+Updated the minimal template to reflect the new constructor signature and mutual-exclusion checks.
+
