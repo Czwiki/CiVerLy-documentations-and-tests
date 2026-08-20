@@ -1,0 +1,21 @@
+for xor_byteadd 2 rounds differential
+
+7584 variables and 296673 clauses were written to 'temp/QALQAN.cnf'
+[  0 ,100] (trying w =  50) : SAT
+[  0 , 50] (trying w =  25) : SAT
+[  0 , 25] (trying w =  12) : UNSAT
+[ 13 , 25] (trying w =  19) : UNSAT
+[ 20 , 25] (trying w =  22) : SAT
+[ 20 , 22] (trying w =  21) : UNSAT
+Traceback (most recent call last):
+  File "/home/henry/test_CiVerLy/qalqan/qalqan.sage.py", line 24, in <module>
+    qalqan.generate_report(model_options)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/nix/store/gyf26ia8f254lk1fs9hkk9v8q6zia6vl-python3-3.13.11-env/lib/python3.13/site-packages/civerly/cipher.py", line 1752, in generate_report
+    root_node.verify_correctness()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/nix/store/gyf26ia8f254lk1fs9hkk9v8q6zia6vl-python3-3.13.11-env/lib/python3.13/site-packages/civerly/trail.py", line 522, in verify_correctness
+    raise AssertionError(
+    ...<3 lines>...
+    )
+AssertionError: Report is not coherent between QALQAN and Add8_byte (input at depth 4): (parent = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) | (child = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).
