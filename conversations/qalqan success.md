@@ -5164,3 +5164,1369 @@ Result:
 R=2 with a 256-bit key now produces: XOR(rk₀) → S → L → Add(rk₁) (the first two rounds), instead of XOR(rk₀) → S → L → XOR(rk₁).
 All 45 Sage doctests in the file pass.
 
+date: 2026-08-20T 12:00:00Z
+participants:
+- You: Henry
+- Assistant: Kilo AI, Kimi 2.7 Code
+topic: "Implementation of the qalqan cipher"
+
+User:
+As you can see, I added some further information on a modified version of @src/civerly/cipher_implementations/qalqan.py . You can find it in @documentation/Qalqan modified.md . It states the modification of the key additions. Please include the possibility of chossing between the original and these other variants in the constructor parameters and and implement these variants. Please also rename the start_round and end_round parameters to start and end to adhere to @documentation/README.md . As always, you can find other information and the reference implementation @documentation/ . Sage is installed via nix.
+
+Let me understand the current state and what needs to be done.
+
+Current state: Qalqan implementation in src/civerly/cipher_implementations/qalqan.py.
+
+Uses original Qalqan: first XOR, middle mod 2^128 addition, last XOR
+Parameters start_round and end_round
+Requested changes:
+
+Add ability to choose variants:
+original Qalqan: first XOR, middle mod 2^128 add, last XOR
+Qalqan_v1_⊕⊞ (XOR-ByteADD): first/last XOR, middle byte-wise mod 256 addition (removing carry bits between bytes)
+Qalqan_v1_⊞⊞ (ByteADD-ByteADD): all round keys added byte-wise mod 256, including first and last (no whitening)
+Rename start_round/end_round to start/end
+Keep backward compatible R parameter
+Provide test vectors and doctests
+Let me think about what the variants mean:
+
+Original: K^⊕_start → S → L → (ADD128 → S → L)^(N-1) → K^⊕_fin
+XOR-ByteADD (⊕⊞): K^⊕_start → S → L → (ByteADD → S → L)^(N-1) → K^⊕_fin, where ByteADD is byte-wise addition mod 256
+ByteADD-ByteADD (⊞⊞): (ByteADD → S → L)^N, no final whitening? Or maybe first/last are byte-wise addition instead of XOR.
+From the text: "The second modification uses byte-wise addition for first and last addition with key as well. This modification transforms the cipher into Markov cipher w.r.t. ⊞operation and can be considered as a cipher model without first round and final whitening."
+
+So ⊞⊞ means all key additions are byte-wise mod 256, including first and last. It can be considered as a cipher model without first round and final whitening (meaning the special whitening operations are removed/changed to regular ⊞).
+
+Now I need to implement ByteADD as 16 parallel ModAdd_CVL(8) operations.
+
+I should also look at existing code style and ensure compatibility. Let me check related files to understand component usage patterns better.
+
+Actually, the user has already given me enough context. Let me plan the implementation:
+
+Add a variant parameter with values like "original", "xor_byteadd", "byteadd_byteadd" or maybe shorter names. Need to decide naming. Since the doc uses Qalqan_v1^⊕⊞ and Qalqan_v1^⊞⊞, I could use:
+"original"
+"xor_byteadd" or "xor_mod8" or "byte_wise"
+"byteadd_byteadd" or "mod8"
+Or maybe use parameter names that are more explicit. The user says "include the possibility of choosing between the original and these other variants in the constructor parameters". Common convention could be variant="original", variant="xor_byteadd", variant="byteadd_byteadd".
+
+Let me think about how to wire the byte-wise addition. 16 ModAdd_CVL(8) components in parallel, each adding one state byte with one key byte.
+
+Actually, there's RK_CVL and RoundkeyXOR_CVL. For byte-wise mod 256 addition, I need ModAdd_CVL(8) with a constant key byte. The RK_CVL component provides round key bits. So I can build a byteadd key addition layer as a subcipher containing 16 ModAdd_CVL(8) components, each with RK_CVL or a constant.
+
+Wait, RK_CVL might be a key variable. For constants, I think RK_CVL(8, const=k_byte) would work like RoundkeyXOR but as a constant? Let me check civerly.component.RK_CVL.
+
+Actually, let me look at imports. Currently imports:
+
+from civerly.component import (
+    RK_CVL,
+    ModAdd_CVL,
+    PermuteLayer_CVL,
+    RoundkeyXOR_CVL,
+    SBox_CVL,
+)
+RK_CVL(128, const=0, name="rk") is used in add128_cipher. So I can use RK_CVL(8, const=k_byte) for constant byte additions.
+
+For the byte-wise addition layer, I should build a reusable subcipher. For each byte position, add a ModAdd_CVL(8) combining state byte and key byte (from RK_CVL with const). Then wire outputs of all 16 ModAdd_CVL to output bytes.
+
+Wait, but each byte needs its own RK_CVL with its own constant. Yes.
+
+Now for the constructor API. The README.md says constructor should accept R, and start/end mutually exclusive with R, and master_key/rks mutually exclusive. Currently it uses key not master_key. The user says rename start_round/end_round to start/end. Should I also rename key to master_key? The README says constructor should accept master_key. The user specifically mentioned renaming start/end. Let me consider whether to also rename key to master_key for consistency.
+
+The README says: "The constructor should accept a master key (master_key), from which the round keys are derived using the internal key-schedule method. Providing a master key and providing explicit round keys (rks) are mutually exclusive."
+
+It's about conventions. While user didn't explicitly ask to rename key to master_key, it would align with README. But it might break existing code that uses key=.... However, we could support both? Or we could add master_key as primary name and maybe deprecate key.
+
+Given the user says "rename the start_round and end_round parameters to start and end to adhere to @documentation/README.md", and README also mentions master_key. But README is about implementing new ciphers. The existing qalqan uses key.
+
+I think to keep backward compatibility with existing doctests in Qalqan, maybe we keep key and add master_key as an alias. Actually, looking at the README template, it shows master_key=None, rks=None.
+
+Since the user specifically instructed to follow README and rename start/end, and README says use master_key, I think I should:
+
+Add master_key parameter
+Keep key parameter as backward-compatible alias (maybe with deprecation warning? Or just silently accept both)
+If both are given, error
+Actually, the existing code tests use key=key. To maintain exact backward compatibility, I could keep key and add master_key as preferred/alias. But README says constructor should accept master_key. The cleanest way: accept both, but treat master_key as the canonical new name. If both given, raise error.
+
+Now for the variant parameter: add variant="original", with options:
+
+"original" - original Qalqan
+"xor_byteadd" - special XOR whitening, middle mod 256 byte-wise addition
+"byteadd_byteadd" - all rounds use mod 256 byte-wise addition
+Naming: maybe variant with string values. In README context, Qalqan_v1^⊕⊞ and Qalqan_v1^⊞⊞ are mathematical names. I could use "xor_byteadd" and "byteadd_byteadd". Or more ASCII: "xor_mod8" and "mod8_mod8". But I should pick clear names.
+
+Maybe use "original", "xor_byteadd" (or "xbyteadd"), "byteadd_byteadd" (or "bbyteadd"). Long names are descriptive.
+
+Let me decide:
+
+variant="original"
+variant="xor_byteadd" (meaning ⊕ at start/end, ⊞ in middle)
+variant="byteadd_byteadd" (meaning ⊞ everywhere)
+Now I need to compute test vectors. I need to run Sage or Python to compute them. Since the reference implementation documentation/qalqan.py has encrypt_block for original. I need to implement the variants in pure Python first to compute test vectors.
+
+Let me write a small script to compute test vectors for the variants. I'll run it via bash.
+
+But first, let me examine the Qalqan implementation more carefully to understand how to integrate byte-wise addition.
+
+Actually, let me also verify I understand the byte ordering. The current Qalqan uses _byte_rev_int to reverse byte order before mod 2^128 addition because reference uses little-endian. Now for byte-wise mod 256 addition, no byte reordering is needed - each byte is added independently.
+
+So for xor_byteadd variant:
+
+Round 0: XOR with rk[0] (RoundkeyXOR_CVL)
+Round 0: S then L
+Middle rounds (1..N-1): byte-wise mod 256 addition with rk[r], then S then L
+Final round N: XOR with rk[N]
+For byteadd_byteadd variant:
+
+Round 0 (or maybe start round): byte-wise mod 256 addition, then S then L
+Middle rounds 1..N-1: byte-wise mod 256 addition, then S then L
+No final XOR whitening; the last whitening is replaced by byte-wise addition. But is the last operation S→L or just key addition?
+Wait. In the original, last round is just XOR (whitening). In byteadd_byteadd variant, it says "uses byte-wise addition for first and last addition with key as well". So the sequence becomes: K^⊞_0 → S → L → K^⊞_1 → S → L → ... → K^⊞_{N-1} → S → L → K^⊞_N
+
+Wait, that's N+1 key additions (no whitening concept). But original has N rounds + whitening. Let me re-read.
+
+Original:
+
+E1 = L(S(K^⊕_start(Text))) -- this is first "round"
+E2 = XSL^{N-1}(...XSL^1(E1)) -- N-1 middle rounds, each XSL = L(S(K^⊞_i(...)))
+E = K^⊕_fin(E2) -- final whitening
+So total: N+1 key additions. First is XOR, then N-1 are mod 2^128, last is XOR.
+
+⊕⊞ modification: first XOR, last XOR, middle N-1 are byte-wise mod 256. So N+1 key additions total.
+
+⊞⊞ modification: "uses byte-wise addition for first and last addition with key as well". So first and last become byte-wise mod 256 instead of XOR. The sequence is then the same structure but all additions are mod 256 byte-wise.
+
+The text also says "can be considered as a cipher model without first round and final whitening". Hmm. Actually "without first round and final whitening" could mean that when you model it as Markov cipher w.r.t. ⊞, the first and last operations don't have the special whitening property. It doesn't necessarily mean the first and last key additions are removed. It means the XOR whitening at boundaries is removed/changed.
+
+So ⊞⊞: all N+1 key additions are byte-wise mod 256.
+
+But wait, the "first round" and "final whitening" might use keys rk[0] and rk[N]? Or different indices?
+
+Actually, if we have N nominal rounds, there are N+1 round keys: rk[0] for first whitening/XOR, rk[1..N-1] for middle rounds, rk[N] for final whitening/XOR. In ⊞⊞, all use byte-wise mod 256 addition. So still N+1 key additions.
+
+Actually, the modified doc says: "The second modification uses byte-wise addition for first and last addition with key as well. This modification transforms the cipher into Markov cipher w.r.t. ⊞ operation and can be considered as a cipher model without first round and final whitening."
+
+This could also be interpreted as: the first and last additions are changed to byte-wise mod 256 addition rather than XOR, so conceptually we don't have whitening anymore. The structure is identical but operations differ.
+
+OK so implementation wise:
+
+original: rk[0] XOR, rk[1..N-1] mod 2^128 add, rk[N] XOR
+xor_byteadd: rk[0] XOR, rk[1..N-1] byte-wise mod 256 add, rk[N] XOR
+byteadd_byteadd: rk[0..N] all byte-wise mod 256 add
+Now, for round slicing:
+
+With start/end, we need to include the correct round operations.
+Round 0: key addition (XOR or byteadd depending on variant) + S + L
+Rounds 1..N-1: key addition (variant-dependent) + S + L
+Round N: key addition only (XOR or byteadd)
+For slicing, if start > 0 and end < N, then all rounds in the slice are middle rounds. But what key addition type? It depends on the variant, not the round. Actually:
+
+For original/xor_byteadd: round 0 uses XOR, rounds 1..N-1 use mod add (128 or 8), round N uses XOR
+For byteadd_byteadd: all rounds use byteadd, but round N is just key addition (no S, no L)
+This is slightly tricky. In byteadd_byteadd, round N is the final "whitening" but using byteadd. So behavior:
+
+If end == full_rounds: final round is just key addition
+Else: full round with key addition + S + L
+So the round construction logic can be:
+
+Determine is_start_round = (r == 0) and is_final_round = (r == full_rounds)
+start round key addition type depends on variant and r==0:
+original/xor_byteadd: XOR if r==0 else add_type
+byteadd_byteadd: byteadd
+end round shape depends on r == full_rounds:
+If final round: just key addition
+Else: key addition + S + L
+Wait but in byteadd_byteadd, the structure is: rounds 0..N-1 are full rounds (add + S + L), round N is just add. So yes the formula above is right.
+
+For original and xor_byteadd: same structure - rounds 0..N-1 full, round N just key addition (XOR).
+
+OK that's consistent: The N-th round is always just key addition. Rounds 0..N-1 are key addition + S + L. The key addition type in round 0 is XOR for original/xor_byteadd, byteadd for byteadd_byteadd. Middle rounds 1..N-1 are mod 2^128 for original, byte-wise mod 256 for xor_byteadd and byteadd_byteadd.
+
+Now, constructor variant parameter should probably affect default name too, e.g. "QALQAN" for original, "QALQAN_XOR_BYTEADD", "QALQAN_BYTEADD_BYTEADD".
+
+Let me now think about how to actually implement the byte-wise key addition layer. I'll create a helper function/subcipher.
+
+def _build_byteadd_key_cipher(name, key_int):
+    """Build a subcipher for byte-wise mod 256 key addition."""
+    cipher = Cipher(128, 128, name=name)
+    key_bytes = key_int.to_bytes(16, "big")
+    nodes = []
+    for j in range(16):
+        rk_node = cipher.add_subcipher(
+            RK_CVL(8, const=key_bytes[j], name=f"rk_byte_{j}"),
+            []
+        )
+        add_node = cipher.add_subcipher(
+            ModAdd_CVL(8, name=f"add_byte_{j}"),
+            [(cipher.IN, (8*j + k, k)) for k in range(8)]
+            + [(rk_node, (k, 8 + k)) for k in range(8)]
+        )
+        nodes.append(add_node)
+    cipher.add_output(
+        [(nodes[j], (k, 8*j + k)) for j in range(16) for k in range(8)]
+    )
+    return cipher
+Wait, RK_CVL(8, const=key_bytes[j]) - does RK_CVL with const work as a constant source? The existing code uses RK_CVL(128, const=0, name="rk") and then later sets add_node_template.nodes[rk_node].const = _byte_rev_int(rks[r]). So yes, it acts as a constant round key source.
+
+Actually, in the byte-wise case, if I put each byte as a separate RK_CVL constant, I need 16 RK_CVL nodes per addition layer. That's fine.
+
+For the middle round template with byteadd, I can either:
+
+Build a middle_round template with byteadd key addition
+Mutate the template before each round
+For original and xor_byteadd, the original code mutates add_node_template to set the const. For byteadd, I'll need a similar approach but with 16 byte constants.
+
+Hmm, maybe a cleaner approach: build a middle_round template once for each variant, and inside it, set the RK_CVL nodes' const values at constructor time. But since round keys change per round, we still need to mutate.
+
+Actually, I can build the byte-wise key-addition layer as a subcipher where the constants are set by mutating the RK_CVL nodes before each round instantiation. Let me design:
+
+# reusable byte-wise 128-bit key addition (mod 256 per byte)
+byteadd_key_cipher = Cipher(128, 128, name="ByteAddKey")
+rk_nodes = []
+for j in range(16):
+    rk_node = byteadd_key_cipher.add_subcipher(
+        RK_CVL(8, const=0, name=f"rk{j}"), []
+    )
+    rk_nodes.append(rk_node)
+add_node = byteadd_key_cipher.add_subcipher(
+    ???  # need 16 ModAdd_CVL with separate inputs
+Wait, each byte has its own ModAdd_CVL(8). So:
+
+byteadd_key_cipher = Cipher(128, 128, name="ByteAddKey")
+rk_nodes = []
+add_nodes = []
+for j in range(16):
+    rk_node = byteadd_key_cipher.add_subcipher(
+        RK_CVL(8, const=0, name=f"rk{j}"), []
+    )
+    rk_nodes.append(rk_node)
+    add_node = byteadd_key_cipher.add_subcipher(
+        ModAdd_CVL(8, name=f"add{j}"),
+        [(byteadd_key_cipher.IN, (8*j + k, k)) for k in range(8)]
+        + [(rk_node, (k, 8 + k)) for k in range(8)]
+    )
+    add_nodes.append(add_node)
+byteadd_key_cipher.add_output(
+    [(add_nodes[j], (k, 8*j + k)) for j in range(16) for k in range(8)]
+)
+Then in middle round:
+
+middle_round_byteadd = Cipher(128, 128, name="QalqanRoundByteAdd")
+n_key = middle_round_byteadd.add_subcipher(
+    byteadd_key_cipher, [(middle_round_byteadd.IN, (i, i)) for i in range(128)]
+)
+n_s = middle_round_byteadd.add_subcipher(
+    sbox_cipher, [(n_key, (i, i)) for i in range(128)]
+)
+n_l = middle_round_byteadd.add_subcipher(
+    l_cipher, [(n_s, (i, i)) for i in range(128)]
+)
+middle_round_byteadd.add_output([(n_l, (i, i)) for i in range(128)])
+key_node_template = middle_round_byteadd.nodes[n_key]
+Wait, when we add byteadd_key_cipher as a subcipher, the node n_key in middle_round refers to the whole byteadd_key_cipher. The RK_CVL nodes are inside byteadd_key_cipher, not inside middle_round.nodes. So mutating middle_round_byteadd.nodes[n_key].const won't work directly. We need to access the inner nodes.
+
+Actually, middle_round_byteadd.nodes[n_key] is the subcipher object for byteadd_key_cipher. Its .nodes attribute contains the inner nodes. So middle_round_byteadd.nodes[n_key].nodes[rk_nodes[j]].const = key_byte.
+
+Hmm, but rk_nodes are the inner indices in byteadd_key_cipher. When we copy/instantiate templates, these indices should remain valid? Let me think.
+
+In the original code:
+
+add_node_template = middle_round.nodes[n_add]
+...
+add_node_template.nodes[rk_node].const = _byte_rev_int(rks[r])
+Here rk_node is the node index inside add128_cipher. When add128_cipher is added as a subcipher to middle_round, the resulting n_add is a node in middle_round representing the add128_cipher instance. middle_round.nodes[n_add] returns the subcipher object add128_cipher (possibly a copy). add_node_template.nodes[rk_node] accesses the rk_node inside that subcipher.
+
+So yes, this pattern works. We can store rk_nodes (inner indices in byteadd_key_cipher) and then access them through middle_round_byteadd.nodes[n_key].nodes[rk_node].
+
+Actually wait, I need to be more careful. Let me check how add_subcipher works. But assuming the original code works, I can follow its pattern.
+
+For the final/non-final round handling:
+
+for r in range(current, end_round + 1):
+    is_final = (r == full_rounds)
+    is_start = (r == 0)
+    if is_final:
+        # just key addition
+        if variant == "original" or variant == "xor_byteadd":
+            kw = RoundkeyXOR_CVL(128, rks[r], name=f"KeyAdd_fin_{r}")
+            node = cipher.add_subcipher(kw, [(node, (i, i)) for i in range(128)])
+        else:  # byteadd_byteadd
+            # mutate byteadd_key_cipher for final round
+            for j, rk_node in enumerate(rk_nodes):
+                key_byte = (rks[r] >> (8 * (15 - j))) & 0xFF  # big-endian byte j
+                byteadd_key_cipher.nodes[rk_node].const = key_byte
+            node = cipher.add_subcipher(byteadd_key_cipher, [(node, (i, i)) for i in range(128)])
+    else:
+        # full round
+        if is_start and variant in ("original", "xor_byteadd"):
+            # XOR start
+            kw = RoundkeyXOR_CVL(128, rks[r], name=f"KeyAdd_start_{r}")
+            node = cipher.add_subcipher(kw, [(node, (i, i)) for i in range(128)])
+            node = cipher.add_subcipher(sbox_cipher, [(node, (i, i)) for i in range(128)])
+            node = cipher.add_subcipher(l_cipher, [(node, (i, i)) for i in range(128)])
+        else:
+            # determine key addition type
+            if variant == "original":
+                add_node_template.nodes[rk_node].const = _byte_rev_int(rks[r])
+                node = cipher.add_subcipher(middle_round, [(node, (i, i)) for i in range(128)])
+            else:  # xor_byteadd or byteadd_byteadd
+                # mutate byteadd key layer
+                for j, rk_node in enumerate(rk_nodes):
+                    key_byte = (rks[r] >> (8 * (15 - j))) & 0xFF
+                    byteadd_key_cipher.nodes[rk_node].const = key_byte
+                node = cipher.add_subcipher(middle_round_byteadd, [(node, (i, i)) for i in range(128)])
+Wait, but mutating byteadd_key_cipher.nodes and then reusing it as a template - is that OK? In the original code, they mutate add_node_template.nodes[rk_node].const before each instantiation. add_node_template is the subcipher object inside middle_round. Wait actually let me re-read original:
+
+n_add = middle_round.add_subcipher(
+    add128_cipher, [(middle_round.IN, (i, i)) for i in range(128)]
+)
+...
+add_node_template = middle_round.nodes[n_add]
+...
+add_node_template.nodes[rk_node].const = _byte_rev_int(rks[r])
+node = cipher.add_subcipher(
+    middle_round, [(node, (i, i)) for i in range(128)]
+)
+So middle_round is the template. n_add is the node index of add128_cipher inside middle_round. add_node_template = middle_round.nodes[n_add] is the add128_cipher subcipher object (inside the template). Then we mutate its inner rk_node constant. Then we add middle_round as a subcipher to cipher.
+
+So each time we call cipher.add_subcipher(middle_round, ...), it might create a copy or reuse. The mutation happens on the template just before addition. This pattern is what the original uses.
+
+For my byteadd variant, I need to mutate the byteadd_key_cipher subcipher before adding middle_round_byteadd. But actually, if I make byteadd_key_cipher a separate subcipher and mutate it, then when middle_round_byteadd.add_subcipher(byteadd_key_cipher, ...) is called, it might create an instance that refers to the template. Then mutating the template affects future instances but not already-added ones. Hmm.
+
+Wait, let me think more carefully. When you call middle_round_byteadd.add_subcipher(byteadd_key_cipher, ...), what happens? If it copies the subcipher, then later mutations to the original byteadd_key_cipher won't affect the already-added copy. But if we mutate middle_round_byteadd.nodes[n_key].nodes[rk_node], that would affect the template's embedded copy.
+
+Actually, the original code does:
+
+add_node_template = middle_round.nodes[n_add]
+add_node_template.nodes[rk_node].const = ...
+This mutates the inner subcipher instance within the middle_round template. So before calling cipher.add_subcipher(middle_round, ...), the template's inner constant is updated. Then when middle_round is instantiated as a subcipher of cipher, it gets the updated constant.
+
+So I should follow the same pattern: build byteadd_key_cipher template, add it to middle_round_byteadd template, then before each round, access middle_round_byteadd.nodes[n_key].nodes[rk_node] and update constants.
+
+Let me restructure:
+
+# Build byte-wise key addition template
+byteadd_key_cipher = Cipher(128, 128, name="ByteAddKey")
+rk_node_indices = []
+for j in range(16):
+    rk_node = byteadd_key_cipher.add_subcipher(
+        RK_CVL(8, const=0, name=f"rk{j}"), []
+    )
+    rk_node_indices.append(rk_node)
+    add_node = byteadd_key_cipher.add_subcipher(
+        ModAdd_CVL(8, name=f"add{j}"),
+        [(byteadd_key_cipher.IN, (8*j + k, k)) for k in range(8)]
+        + [(rk_node, (k, 8 + k)) for k in range(8)]
+    )
+# output wiring...
+
+# Build middle round with byte-wise key addition
+middle_round_byteadd = Cipher(128, 128, name="QalqanRoundByteAdd")
+n_key_ba = middle_round_byteadd.add_subcipher(
+    byteadd_key_cipher, [(middle_round_byteadd.IN, (i, i)) for i in range(128)]
+)
+n_s_ba = middle_round_byteadd.add_subcipher(
+    sbox_cipher, [(n_key_ba, (i, i)) for i in range(128)]
+)
+n_l_ba = middle_round_byteadd.add_subcipher(
+    l_cipher, [(n_s_ba, (i, i)) for i in range(128)]
+)
+middle_round_byteadd.add_output([(n_l_ba, (i, i)) for i in range(128)])
+key_ba_template = middle_round_byteadd.nodes[n_key_ba]
+Then in the round loop:
+
+# for byteadd middle round
+for j, rk_idx in enumerate(rk_node_indices):
+    key_byte = (rks[r] >> (8 * (15 - j))) & 0xFF
+    key_ba_template.nodes[rk_idx].const = key_byte
+node = cipher.add_subcipher(middle_round_byteadd, ...)
+Now I need to determine how to extract byte j from a 128-bit integer in big-endian order. The state bytes in CiVerLy are big-endian with byte 0 being most significant, bits 0..7 being byte 0. So key_bytes[j] should be (key_int >> (8 * (15 - j))) & 0xFF.
+
+Wait, let me verify with the existing code. The existing code does:
+
+rks = [int.from_bytes(rk, "big") for rk in _qalqan_round_keys(key, needed)]
+So the round key integer is big-endian, meaning byte 0 (MSB) is in bits 127..120. For j from 0 to 15 (big-endian byte index), the bit position is 8*(15-j) to 8*(15-j)+7. So key_byte_j = (key_int >> (8*(15-j))) & 0xFF.
+
+Now for computing test vectors. I need to implement the variants in pure Python. Let me write a script.
+
+Actually, before I write code, I should run some tests with the existing implementation to ensure I understand it correctly. But I also need to plan the full logic.
+
+Also need to think about the parameter validation. README says: R and (start, end) mutually exclusive. Currently code allows R as total rounds and start_round/end_round. I need to:
+
+Rename start_round/end_round to start/end
+Add validation: if R is given with start/end, raise error
+Keep backward compat with maybe a grace period? The user explicitly says rename to start/end.
+But what about existing doctests that use start_round= and end_round=? Since we're renaming, those will break. We can remove them or update them. The user wants to adhere to README, so we should update doctests to use start= and end=.
+
+Actually, to be safe and backward compatible, I could accept both start/end and start_round/end_round but the user says rename. I'll follow the instruction and rename.
+
+Now about R and start/end mutual exclusivity. Currently the code has R=None by default and start_round=None, end_round=None. It picks one or the other or full. I need to error if both are given.
+
+Current logic:
+
+if start_round is not None or end_round is not None:
+    ...
+elif R is not None:
+    ...
+else:
+    full
+I need to change to:
+
+if (start is not None or end is not None) and R is not None:
+    raise ValueError("R and start/end are mutually exclusive.")
+if start is not None or end is not None:
+    if start is None or end is None:
+        raise ValueError("Both start and end must be provided.")
+    ...
+elif R is not None:
+    ...
+else:
+    full
+Actually, the README template has a slightly different logic:
+
+if end is None:
+    end = R
+if start is not None and end is not None and R != end - start + 1:
+    raise ValueError("R cannot be combined with an explicit (start, end) range")
+But that template assumes R is always set. For Qalqan, R might not be set (full rounds). We can adapt.
+
+Actually, let me think about how R should work. Currently:
+
+If R equals full_rounds: end_round = full_rounds (includes final whitening)
+Else: end_round = R - 1 (first R rounds, no final whitening)
+This is backward-compatible behavior. For example, R=4 gives rounds 0,1,2,3 (no final whitening). If R=full (17), gives rounds 0..17 incl final whitening.
+
+This is a bit unusual. Let me preserve it since existing doctests rely on it. But one issue: the README says constructor may keep R parameter that sets total number of rounds. Maybe for Qalqan, R should be interpreted as the number of "round operations" where if R < full_rounds, it doesn't include final whitening.
+
+Hmm, the existing implementation treats R as total rounds applied, but because of the whitening structure, if R < full_rounds, it gives the first R rounds (0..R-1). If R == full_rounds, it gives all rounds including final whitening (0..N). This is documented in the docstring. I'll preserve it.
+
+For start/end: these are explicit round indices, inclusive. If end == full_rounds, include final whitening. Else end with a full middle round.
+
+OK now let me think about generating test vectors. I'll write a Python script that implements the three variants and get known vectors. But since Sage is installed via nix, I might need to run sage or python3. Let me check the environment. Actually, I can run a Python script since the variants only need basic operations.
+
+Let me write documentation/qalqan_variants.py or just a temporary script for computing test vectors. I'll probably need to test in the actual Sage environment too to ensure the CiVerLy implementation works.
+
+But the user asked me to implement, not just to produce code. So I need to actually write to the file and run tests.
+
+Let me first outline the changes to qalqan.py:
+
+Add variant parameter to __init__ with default "original"
+Rename start_round/end_round to start/end
+Add master_key parameter and keep key as alias (or replace?)
+Build byte-wise key addition layer template
+Adjust round construction based on variant
+Update docstring with new examples/test vectors
+Add doctests for variants
+Wait, about key vs master_key: I think the cleanest approach is:
+
+Add master_key as the canonical parameter
+Keep key as deprecated alias (maybe without deprecation warning)
+If both provided: error
+If either provided, use it
+Actually, since the docstring examples use key=..., if I rename to master_key, I need to update all examples. That's fine. But to minimize changes, I could support both. Let me support both but prefer master_key. If both provided, raise error.
+
+Hmm, but the user said "rename the start_round and end_round parameters to start and end". Didn't say key. Maybe master_key renaming wasn't requested. Let me re-read.
+
+"As always, you can find other information and the reference implementation @documentation/ . ... It states the modification of the key additions. Please include the possibility of choosing between the original and these other variants in the constructor parameters and implement these variants. Please also rename the start_round and end_round parameters to start and end to adhere to @documentation/README.md ."
+
+So explicit asks: variants, rename start/end. The README says master_key convention, but user didn't explicitly ask. However "to adhere to @documentation/README.md" suggests following its conventions. I'll add master_key support but keep key for backward compatibility to avoid breaking existing API too much. Actually, since we're already breaking by renaming start/end, maybe we should go full README and use master_key. But preserving key is simple enough. Let me support both.
+
+Actually, one concern: if I change key to master_key in the function signature, existing code using key= will break. If I support both via **kwargs, the signature can show master_key=None, key=None, and we handle both in __init__. That's fine. Let me do that.
+
+Now, let me think about the pure Python test vector computation script.
+
+SBOX = [...]  # same as in qalqan.py
+def S(block):
+    return bytes(SBOX[b] for b in block)
+
+def L(block):
+    B = list(block)
+    R = [0]*16
+    r0 = (B[0]+B[1]+B[2]+B[3]) & 0xff
+    r5 = (B[4]+B[5]+B[6]+B[7]) & 0xff
+    r10 = (B[8]+B[9]+B[10]+B[11]) & 0xff
+    r15 = (B[12]+B[13]+B[14]+B[15]) & 0xff
+    R[0], R[5], R[10], R[15] = r0, r5, r10, r15
+    R[4] = (B[4]+r0) & 0xff
+    R[8] = (B[8]+r0) & 0xff
+    R[12] = (B[12]+r0) & 0xff
+    R[1] = (B[1]+r5) & 0xff
+    R[9] = (B[9]+r5) & 0xff
+    R[13] = (B[13]+r5) & 0xff
+    R[2] = (B[2]+r10) & 0xff
+    R[6] = (B[6]+r10) & 0xff
+    R[14] = (B[14]+r10) & 0xff
+    R[3] = (B[3]+r15) & 0xff
+    R[7] = (B[7]+r15) & 0xff
+    R[11] = (B[11]+r15) & 0xff
+    return bytes(R)
+
+def xor128(a, b):
+    return bytes(x^y for x,y in zip(a,b))
+
+def add128(a, b):
+    ai = int.from_bytes(a, "little")
+    bi = int.from_bytes(b, "little")
+    ci = (ai+bi) & ((1<<128)-1)
+    return ci.to_bytes(16, "little")
+
+def byteadd128(a, b):
+    return bytes((x+y)&0xff for x,y in zip(a,b))
+
+def variant_encrypt(block, round_keys, variant):
+    state = block
+    N = len(round_keys) - 1
+    # first round
+    if variant == "original" or variant == "xor_byteadd":
+        state = xor128(state, round_keys[0])
+    else:
+        state = byteadd128(state, round_keys[0])
+    state = S(state)
+    state = L(state)
+    # middle rounds
+    for rk in round_keys[1:-1]:
+        if variant == "original":
+            state = add128(state, rk)
+        else:
+            state = byteadd128(state, rk)
+        state = S(state)
+        state = L(state)
+    # final whitening
+    if variant == "original" or variant == "xor_byteadd":
+        state = xor128(state, round_keys[-1])
+    else:
+        state = byteadd128(state, round_keys[-1])
+    return state
+Now compute for key=bytes(range(32)) and pt=bytes(range(16)).
+
+But wait, I need to know what round_keys are. I can use the existing _qalqan_round_keys function. Or I can use the reference implementation in documentation/qalqan.py. Since the existing implementation already matches, I can import it.
+
+Actually, should I add a helper script to the repo? Maybe not. I can write a temp script and run it via bash. Let me do that.
+
+One more thing: the README.md in documentation has a git merge conflict marker (<<<<<<< HEAD etc.) in it. Should I fix that? The user didn't ask, but it's ugly. However, the user said "As always, you can find other information and the reference implementation @documentation/". I shouldn't modify README unless asked. Actually, fixing a merge conflict might be considered helpful, but it's not part of the task. I'll leave it alone unless it causes issues.
+
+Now let me start implementing. First, I'll create a todo list since this is multi-step.
+
+Let me use todowrite.
+
+Steps:
+
+Compute test vectors for new variants using a temporary script
+Modify qalqan.py: add variant parameter, rename start/end, add master_key alias, implement byte-wise key addition layer, adjust round construction
+Update docstring and doctests
+Run doctests and verify test vectors
+Let me now write the temporary script for test vectors.
+
+Actually, I realize I should check if Sage is available and what command to run. The user said "Sage is installed via nix." Let me check. Maybe there's a sage command. I'll use bash.
+
+But for test vector computation, pure Python is enough. For verifying CiVerLy implementation, I need Sage, which I'll run later.
+
+Let me start by creating a temporary Python script.
+
+The user wants me to modify the existing qalqan.py implementation to:
+
+Add constructor parameter to choose between original and modified variants (Qalqan v1 ⊕⊞ and Qalqan v1 ⊞⊞).
+Rename start_round / end_round to start / end.
+Implement the variants where key additions use byte-wise modular addition (mod 256) instead of full 128-bit modular addition.
+I should first compute the test vectors for the new variants so I can include them in doctests and verify they match. I'll write a Python script that uses the reference documentation/qalqan.py to compute test vectors for the two modified variants.
+
+Let me plan the implementation:
+
+The original Qalqan uses:
+Round 0: XOR whitening, then S, then L
+Middle rounds: ADD (mod 2^128), then S, then L
+Final round: XOR whitening
+Qalqan v1 ⊕⊞: first and last key additions use XOR, middle rounds use byte-wise mod 256 addition.
+Qalqan v1 ⊞⊞: all key additions use byte-wise mod 256 addition (no whitening conceptually, as the document says it can be considered as a cipher model without first round and final whitening - but I think they still apply the key but with byte-wise addition instead of XOR).
+Wait, let me re-read the modified.md carefully: "The first modification has all its round key additions 𝐾+_k modulo 2^128 substituted with additions 𝐾⊞_k (𝑥) = 𝑥⊞𝑘." where ⊞ probably means byte-wise vector addition modulo 2^8.
+
+Actually, the notation is confusing. Let me check what ⊞ means in Qalqan.md: "⊞ is modulo 2128 addition;" - in the main Qalqan.md, ⊞ means mod 2^128. "∔ is modulo 256 addition;" - ∔ means mod 256.
+
+But in the modified.md, it uses ⊞ for byte-wise mod 256 addition. Let me re-read: "modification, where byte-wise vector addition ⊞ modulo 2^8 is used. The first modification has all its round key additions 𝐾+_k modulo 2^128 substituted with additions 𝐾⊞_k (𝑥) = 𝑥⊞𝑘."
+
+So in the modified.md context, ⊞ means byte-wise mod 256. Note that this notation is reset for these modifications.
+
+For Qalqan v1 ⊕⊞:
+
+First round key addition: XOR (same as original)
+Middle rounds: byte-wise mod 256 addition (instead of mod 2^128)
+Last round key addition: XOR (same as original)
+For Qalqan v1 ⊞⊞:
+
+First round key addition: byte-wise mod 256 addition (instead of XOR)
+Middle rounds: byte-wise mod 256 addition (instead of mod 2^128)
+Last round key addition: byte-wise mod 256 addition (instead of XOR)
+The document says "This modification transforms the cipher into Markov cipher w.r.t. ⊞operation and can be considered as a cipher model without first round and final whitening."
+
+I think for API purposes, the user wants to be able to choose between three modes:
+
+Original (full 128-bit mod addition for middle rounds, XOR for first/last)
+Qalqan_v1_xor_bytewise (XOR first/last, byte-wise mod 256 middle) - call it "xor_bytewise" or "⊕⊞"
+Qalqan_v1_bytewise_bytewise (byte-wise mod 256 for all) - call it "bytewise" or "⊞⊞"
+I'll use parameter variant with values like "original", "xor_byteadd", "byteadd_byteadd", or maybe more readable names.
+
+First, I need to compute test vectors using the reference implementation in documentation/qalqan.py. The reference implementation only has the original variant, so I'll extend it or just compute directly.
+
+Actually, I can write a standalone script that imports the L, S, and key schedule from documentation/qalqan.py and implements the variants.
+
+Let me read the project structure to understand where to write the helper. Actually, I can just use bash to run a python script with nix-shell.
+
+But first, I should look at how to run Python/Sage in this environment. The user mentions Sage is installed via nix. Let me check if there's a setup to run sage or python.
+
+Let me create a Python script to compute test vectors.
+
+
+... (code executions and creation of test vectors)
+
+The task is to extend the existing CiVerLy Qalqan implementation to support the variants described in documentation/Qalqan modified.md, while aligning the constructor parameter names with documentation/README.md (start/end instead of start_round/end_round).
+
+Let me analyze the requirements:
+
+The original Qalqan uses:
+First key addition: XOR (bit-wise)
+Middle key additions: mod 2^128 addition
+Last key addition: XOR (bit-wise)
+Two modifications:
+Qalqan v1^{⊕⊞}: All middle round key additions (K^+_k mod 2^128) replaced by byte-wise vector addition ⊞ mod 2^8. First and last still use XOR.
+Qalqan v1^{⊞⊞}: All key additions use byte-wise addition ⊞ mod 2^8 (first, middle, last). This is equivalent to a cipher without first round/final whitening from the XOR perspective, and is a Markov cipher w.r.t. ⊞.
+I need to:
+
+Rename start_round/end_round to start/end in QALQAN_CVL constructor
+Add a parameter variant to choose between:
+"original" (default): original Qalqan behavior
+"xor_byteadd" or "qalqan_xor_byteadd": first/last XOR, middle byte-wise addition
+"byteadd_byteadd" or "qalqan_byteadd_byteadd": all byte-wise addition (including no whitening)
+The README requires:
+R and (start,end) mutually exclusive
+Both start and end must be provided together
+master_key/rks mutually exclusive (already somewhat handled, but let's strengthen)
+Wait, the current constructor uses key not master_key, and rks not master_key. README says use master_key. The user said rename start_round/end_round to start/end - they didn't explicitly ask to rename key to master_key, but the README template uses master_key. However, the existing code uses key. Let me stick to the user's explicit request: rename start_round and end_round only. The README says constructor "must" accept master_key and rks mutually exclusive. But user only said rename start_round/end_round. I should carefully consider. Since this is a bugfix-style request based on README adherence, and README says use master_key, perhaps I should rename key to master_key too? But the user explicitly said "rename the start_round and end_round parameters to start and end". I'll do that. I won't force master_key rename unless requested, since it could break existing code. Wait - the README says "The constructor should accept a master key (master_key)". But the existing code uses key. Should I add master_key as alias? Hmm, but that's not what the user asked. Let me focus on what the user asked. Actually, the README is a guide, but the user's request is specific. Let me just follow the explicit request: rename start_round/end_round, and add variants.
+
+Actually, re-reading: "As always, you can find other information and the reference implementation". The README section on sliceable round construction says it must accept start and end together, and R and start/end mutually exclusive, and master_key/rks mutually exclusive. But the user only asks for start/end rename and variants. Let me be minimal but correct:
+
+Rename start_round/end_round to start/end
+Make sure start/end are both provided or both omitted
+Ensure R and (start,end) are mutually exclusive
+Add variant parameter
+Keep key parameter (but maybe also add master_key as alias to satisfy README? No, minimal changes). Actually, maybe I should add master_key as an additional accepted parameter for compatibility and error if both are given? Hmm. The user said "to adhere to documentation/README.md". So I should probably align with README which says constructor accepts master_key. But the existing constructor uses key. To be safe, I could accept both key and master_key with at most one allowed, but that seems overcomplicated. Or just rename key to master_key. But user explicitly didn't mention this. I'll minimize: keep key parameter, but add validation that it doesn't conflict with rks. The README also says "Providing a master key and providing explicit round keys (rks) are mutually exclusive. The constructor must raise an error when both are supplied." The current code does generate rks from key if rks is None. It doesn't explicitly raise if both are provided. I should add that check.
+Wait, I need to check the current behavior: if both rks and key are passed, it uses rks (because if rks is not None for full_rounds, and if rks is None for generating needed keys). So it silently ignores key. I should add explicit error.
+
+Also the README says: "when start and end are provided, R must not be used to override the range, and vice versa. The constructor should raise an error when both are given together." Current code: if start/end are provided, it ignores R. It doesn't raise. I should add explicit check. Good.
+
+Now for variants:
+
+"original" or "Qalqan_v1": First XOR, middle mod 2^128, last XOR.
+"xor_byteadd" or "⊕⊞": First XOR, middle byte-wise mod 256, last XOR.
+"byteadd_byteadd" or "⊞⊞": All byte-wise mod 256 (no XOR whitening).
+For modeling: byte-wise addition mod 256 can be done with 16 parallel ModAdd_CVL(8) components. This is already what the L layer does. So I can build a byte-wise key addition layer using ModAdd_CVL(8) for each byte.
+
+For the original variant middle rounds, it uses mod 2^128 addition with byte reversal to match little-endian.
+
+For xor_byteadd: middle rounds use byte-wise ModAdd_CVL(8) for each byte. First/last still RoundkeyXOR_CVL.
+
+For byteadd_byteadd: all rounds including first and last use byte-wise ModAdd_CVL(8). But we may need to handle the "no first round and final whitening" interpretation. If variant is byteadd_byteadd, then round 0 is not whitening but just ADD→S→L, and round N is also ADD→S→L? Wait, the document says: "The second modification uses byte-wise addition for first and last addition with key as well. This modification transforms the cipher into Markov cipher w.r.t. ⊞operation and can be considered as a cipher model without first round and final whitening." So the first and last key additions are now byte-wise addition. The structure is:
+
+Round 0: byte-wise ADD(rk[0]) → S → L
+Middle rounds 1..N-1: byte-wise ADD(rk[i]) → S → L
+Round N: byte-wise ADD(rk[N])
+So for byteadd_byteadd, there is no special whitening: round 0 is a normal middle-style round (ADD→S→L), and round N is just byte-wise ADD (like final whitening but byte-wise instead of XOR).
+
+This affects start/end slicing:
+
+For original and xor_byteadd variants, round 0 format is XOR→S→L, middle is ADD→S→L, round N is XOR.
+For byteadd_byteadd variant, round 0 format is ADD→S→L, round N format is ADD (no S, no L). Wait, but if end != N, the last round in the slice should be ADD→S→L.
+Let me define:
+
+full_rounds = N (nominal round count, e.g. 17 for 256-bit key)
+total round keys = N + 1 (indices 0..N)
+For original/xor_byteadd:
+Round 0: whitening XOR → S → L
+Rounds 1..N-1: ADD → S → L
+Round N: whitening XOR
+For byteadd_byteadd:
+Round 0: byte-wise ADD → S → L (not whitening)
+Rounds 1..N-1: byte-wise ADD → S → L
+Round N: byte-wise ADD (final key addition, no S/L)
+Now round indices for slicing. The README says slicing with start/end (0-based, inclusive). The current start_round/end_round semantics:
+
+start_round=0 means start with round 0 (XOR→S→L for original)
+end_round=N means final whitening XOR
+I need to preserve this but adapt for variant.
+
+For start/end slicing, regardless of variant, we should think in terms of round index semantics:
+
+Index 0 corresponds to first key application (rk[0]) + S + L for all variants except that the key op differs.
+Index N corresponds to last key application (rk[N]) only.
+So for byteadd_byteadd:
+
+Round 0: byte-wise ADD(rk[0]) → S → L
+Round i (1..N-1): byte-wise ADD(rk[i]) → S → L
+Round N: byte-wise ADD(rk[N])
+That matches "cipher model without first round and final whitening" - meaning conceptually there is no distinct whitening, just regular byte-wise addition for all key applications. But round N still has no S/L because it's the last operation.
+
+So the assembly logic changes:
+
+If variant == "byteadd_byteadd":
+Round 0 is middle-style but with byte-wise add. If start == 0, we include round 0 as ADD→S→L.
+Rounds 1..N-1 are ADD→S→L.
+Round N is just ADD (no S, no L).
+Else (original / xor_byteadd):
+Round 0 is XOR→S→L.
+Rounds 1..N-1 are ADD→S→L (where ADD is either mod 2^128 or byte-wise depending on variant).
+Round N is XOR.
+Now the reusable middle-round template currently does ADD→S→L using add128_cipher. For xor_byteadd, byte-wise ADD would use a different subcipher. I need to create a byte-wise addition subcipher for 128-bit state.
+
+For byte-wise ADD: A subcipher with 16 parallel ModAdd_CVL(8) components, one per byte. The RK_CVL supplies the key bytes. Actually ModAdd_CVL takes two inputs x||y and returns x+y. To add a key constant, I need to supply the constant as the second input. The current add128_cipher uses RK_CVL as a constant source connected to the second input of ModAdd_CVL(128). For byte-wise, I can use RK_CVL(128) as the second input to 16 ModAdd_CVL(8) components. But RK_CVL outputs 128 bits. I can wire bits [0..7] to first byte add, etc.
+
+Let me build a ByteAdd_CVL component instead of a subcipher? Actually, a component would be cleaner. But I want to avoid modifying component.py. I can build it as a Cipher subcipher.
+
+Wait, ModAdd_CVL(8) outputs a byte. I need input x (128 bits) and key (128 bits) and output x+key byte-wise. I'll create add8_cipher that:
+
+Takes input 128 bits (IN)
+Adds RK_CVL(128, const=key)
+For each byte j, adds ModAdd_CVL(8) with inputs from IN bits [8j..8j+7] and RK bits [8j..8j+7]
+Outputs the 16 resulting bytes.
+Actually the current add128_cipher already does ModAdd_CVL(128) with byte reversal. For byte-wise, I'll create add8x16_cipher.
+
+Alternatively, I could create a single custom component ByteAdd_CVL in qalqan.py? Components need to implement _model_sat, and ModAdd_CVL(8) supports SAT modeling with differential. But a single 128-bit component for byte-wise addition would be modeled as 16 independent ModAdd_CVL(8). I could subclass Component. But using the existing subcipher approach is safer and fits the codebase.
+
+I'll create a helper function that builds a byte-wise addition layer subcipher.
+
+Also, I need to be careful: for original variant, full_rounds = N, round keys count = N+1. For xor_byteadd and byteadd_byteadd, the round keys are the same from the key schedule. The variant only changes the operation.
+
+But wait - for byteadd_byteadd, should round N be considered a separate "final" round without S/L? Yes. So the cipher with start=0, end=N will have N+1 key applications.
+
+Now let me think about validation:
+
+variant must be one of the recognized strings. I should define constants or accept strings. Use strings: "original", "xor_byteadd", "byteadd_byteadd". Also maybe names from paper: "qalqan_v1", "qalqan_v1_xor_byteadd", "qalqan_v1_byteadd_byteadd". Keep simple: "original", "xor_byteadd", "byteadd_byteadd". Validate.
+R and start/end mutually exclusive: raise if both.
+start/end both required if one provided.
+rks and key/master_key mutually exclusive: raise if both.
+Round range valid.
+Now implementation plan:
+
+Update module docstring to describe variants.
+Rename constructor params: start_round → start, end_round → end.
+Add variant parameter (default "original").
+Add master_key parameter as alias to key? Hmm. The user didn't ask. But to "adhere to README", maybe. Yet README says "must accept master_key". If I keep key, I'm not adhering. But renaming key to master_key might break things. Actually, existing tests in qalqan.py use key=. If I rename to master_key, doctests need updating. That's fine, but is it what user wants? They said "rename the start_round and end_round parameters". I think they didn't mention key. I'll add master_key as an alternative parameter? Python doesn't allow two kwargs. I could use key as before and document that it serves as master key. The README is a guide; the constructor already provides rks/key mutual exclusion implicitly. I'll add explicit error if both provided. I think that's sufficient for "adhere to README" on the parts they're asking about.
+Actually, re-reading the message: "Please include the possibility of chossing between the original and these other variants in the constructor parameters and and implement these variants. Please also rename the start_round and end_round parameters to start and end to adhere to @documentation/README.md ." So only these two things are explicit. But the README section also says R/start/end mutual exclusivity etc. Since I'm rewriting this part, I should also ensure these rules are enforced. That's directly related to using start/end.
+
+OK, proceed.
+
+Now, I also need to ensure the doctests are updated with new parameter names and variant test vectors.
+
+Also, I should run doctests to verify.
+
+Structural changes:
+
+Keep _qalqan_round_keys, _normalize_key, etc.
+In __init__:
+Parse variant, validate.
+Determine full_rounds.
+Resolve start/end (mutually exclusive with R).
+Check key/rks mutual exclusion.
+Build round keys.
+Build S-box layer subcipher (unchanged).
+Build L layer subcipher (unchanged).
+Build add128 subcipher (for original middle).
+Build add8x16 subcipher (for byte-wise additions in variants).
+Build middle-round template(s). Actually need different templates for original/xor_byteadd (uses add128 or add8x16) vs byteadd_byteadd (uses add8x16 but start round 0 is same as middle).
+Assemble cipher.
+For clarity, I'll create helper function _build_byteadd_layer(key_int) or just build a subcipher.
+
+Wait, the middle_round template is reused with mutation of the key constant. But if we have two types of middle rounds (original uses mod 128, xor_byteadd uses byte-wise), building one template per variant is fine. For byteadd_byteadd, the round 0 is byte-wise middle style, and round N is byte-wise addition only. So we need:
+
+middle_round_128: ADD128 → S → L (for original)
+middle_round_8: ADD8x16 → S → L (for xor_byteadd middle, and byteadd_byteadd rounds 0..N-1)
+final_add8: ADD8x16 only (for byteadd_byteadd round N)
+For original:
+
+If start == 0: XOR(rk[0]) → S → L
+Rounds current..end: if r == end == full_rounds: XOR(rk[r]); else: use middle_round_128 with key rk[r]
+For xor_byteadd:
+
+If start == 0: XOR(rk[0]) → S → L
+Rounds current..end: if r == end == full_rounds: XOR(rk[r]); else: use middle_round_8 with key rk[r]
+For byteadd_byteadd:
+
+If start == 0: use middle_round_8 with key rk[0]
+Rounds current..end: if r == end == full_rounds: use final_add8 with key rk[r]; else: use middle_round_8 with key rk[r]
+But for byteadd_byteadd slicing: if start > 0 or end < full_rounds, then round N semantics may not apply. The rule "if r == end and r == full_rounds: final no S/L" applies generally. So for byteadd_byteadd, if end == full_rounds (N), the last operation is just byte-wise ADD. For original/xor_byteadd, it's XOR. Good.
+
+What if start == full_rounds (N)? Then we just do final key addition (XOR or byte-wise) and output.
+
+Implementation of byte-wise add layer:
+
+add8x16_cipher = Cipher(128, 128, name="Add8x16")
+rk_node = add8x16_cipher.add_subcipher(RK_CVL(128, const=0, name="rk"), [])
+nodes = []
+for j in range(16):
+    modadd8 = ModAdd_CVL(8, name=f"ModAdd8_{j}")
+    n = add8x16_cipher.add_subcipher(
+        modadd8,
+        [(add8x16_cipher.IN, (8*j + b, b)) for b in range(8)]
+        + [(rk_node, (8*j + b, 8 + b)) for b in range(8)]
+    )
+    nodes.append(n)
+add8x16_cipher.add_output(
+    sum(([ (nodes[j], (b, 8*j + b)) for b in range(8) ] for j in range(16)), [])
+)
+Wait, in add128_cipher, RK_CVL has output length 128 and is connected to ModAdd_CVL(128) second input. For byte-wise, I use RK_CVL(128) and split its output bits to each ModAdd_CVL(8). That's fine.
+
+But be careful: the RK_CVL const for byte-wise addition should be the big-endian int of the round key bytes as stored? In the big-endian CiVerLy vector, ModAdd_CVL(8) treats bit 0 as MSB and bit 7 as LSB (since int_to_vec/vec_to_int are big-endian). The key bytes should be wired in their natural byte positions. Setting const = int.from_bytes(rk_bytes, "big") and wiring bits [8j..8j+7] correctly gives each byte. So no byte reversal needed for byte-wise addition (unlike mod 2^128 reference which is little-endian). Good.
+
+Now for the key name in mutation: In middle_round templates, we have a node for the addition subcipher (add128 or add8x16). Inside that subcipher we have rk_node. The current code stores:
+
+n_add = middle_round.add_subcipher(add128_cipher, ...)
+add_node_template = middle_round.nodes[n_add]
+Then sets add_node_template.nodes[rk_node].const = _byte_rev_int(rks[r]) each round.
+
+Wait, middle_round.nodes[n_add] returns the node object which contains a subcipher instance. The subcipher instance has its own nodes dict with the rk_node. So add_node_template.nodes[rk_node] accesses the RK_CVL inside the instantiated middle_round. Then mutating const works because the template is reused, so when added again the const carries over to the new instance. But after adding to the main cipher, the instance in main cipher is a copy? Actually in CiVerLy, when you add_subcipher a Cipher object, it copies it. Let me verify by checking existing SPECK_CVL: it uses RoundkeyXOR_CVL with const mutated. Actually SPECK sets before each round. The current qalqan.py mutates add_node_template.nodes[rk_node].const before each cipher.add_subcipher(middle_round, ...). This should work because add_subcipher copies the subcipher at the time of addition. So the mutation must happen before adding, not after.
+
+In current code:
+
+add_node_template.nodes[rk_node].const = _byte_rev_int(rks[r])
+node = cipher.add_subcipher(middle_round, ...)
+Yes. I'll keep this pattern.
+
+For byte-wise variant middle round, I'll create middle_round_8 similarly.
+
+Now consider naming: for byte-wise variant, the key addition component may have different SAT semantics than mod 2^128. The ModAdd_CVL(8) has proper differential modeling. Good.
+
+But wait, there may be an issue with reusing the same add8x16_cipher instance in both middle_round_8 and final_add8, or across rounds. The current code builds sbox_cipher, l_cipher, add128_cipher, middle_round as "template" Cipher objects and reuses them. For byte-wise, I can similarly build add8x16_cipher and reuse it. I need separate templates for middle_round_8 and final_add8.
+
+However, the final_add8 template could reuse add8x16_cipher directly (not wrapped in a middle round). For final round, we just need ADD.
+
+For original final round whitening, currently uses RoundkeyXOR_CVL(128, rks[r]) directly. That's fine.
+
+Now potential issue: In byteadd_byteadd variant, when start > 0 but end == full_rounds, the last round is final byte-wise ADD. Good. When end < full_rounds, last round is middle_round_8. Good.
+
+Edge case: If start == end == 0 and variant byteadd_byteadd: we should include round 0 as middle (ADD→S→L). The general loop handles this: current=0 (since variant byteadd_byteadd doesn't special-case round 0), then for r in range(0, end+1): if r==end==full_rounds? No (end=0, full_rounds=N). So middle_round_8. Good.
+
+Edge case: If start == end == full_rounds: range(full_rounds, full_rounds+1) contains r=full_rounds, and r==end==full_rounds, so final add (XOR or byte-wise). Good.
+
+Edge case: If variant original/xor_byteadd and start == 0 but end == 0: current=0 handler creates XOR→S→L, then loop range(1,1) empty. Good.
+
+Edge case: start=0, end=N-1 for original: current=0 handler creates round 0, loop r=1..N-1 all middle, no final whitening. Good.
+
+I think this is good.
+
+Now regarding the R parameter semantics: current code says:
+
+elif R is not None:
+    R = int(R)
+    start_round = 0
+    if R == full_rounds:
+        end_round = full_rounds
+    else:
+        end_round = R - 1
+This is confusing: R=full_rounds means full cipher including whitening (N+1 keys). R<full_rounds means R rounds (indices 0..R-1, where round 0 is whitening and rounds 1..R-1 are middle). For example, R=4 gives rounds 0,1,2,3 all ADD→S→L (with round 0 XOR). The test vector 433ed3214f19515e47fc9854fb317d79 matches the first 4 rounds (0..3) of full cipher.
+
+I'll preserve this semantics and rename to start/end. Actually the internal resolution still uses start/end; R just maps to start/end. Good.
+
+But wait: the README's template says R=4, start=1, end=None with check if start is not None and end is not None and R != end - start + 1: raise. That's different. The current qalqan uses different semantics. I should not copy the template blindly. I should preserve backward compatibility for R as much as possible. The user asked to rename start_round/end_round; they didn't ask to change R semantics. I'll keep current R semantics, and maybe consider start == 0 and end == R-1. That's the current behavior.
+
+But README says R and (start,end) must be mutually exclusive. Current code makes them mutually exclusive implicitly (if start or end provided, use them; else use R). It doesn't raise if both. I'll add the raise.
+
+Now start and end semantics: I'll preserve 0-based inclusive rounds, where round 0 is the initial whitening (or first key+S+L for byteadd_byteadd), and round full_rounds is the final whitening. The README says: "If the cipher has an initial or final whitening layer, model these as separate subciphers (or as round 0 and round R+1)". The current code models round 0 as whitening and round N as final. For byteadd_byteadd, round 0 is not whitening. Should I adapt round numbering? I think it's fine to keep round 0 as the first round and round N as final. The README guideline is not strict; it just says model them as separate subciphers.
+
+Now update docstring with new parameters.
+
+Naming convention: I'll define literal values for variants in the module, maybe _VARIANTS = ("original", "xor_byteadd", "byteadd_byteadd").
+
+Docstring should explain:
+
+variant: "original" (default), "xor_byteadd" (byte-wise additions in middle rounds, first/last XOR), "byteadd_byteadd" (all key additions byte-wise, no XOR whitening).
+start/end replace start_round/end_round.
+For doctests:
+
+Update existing examples to use start= and end=.
+Add variant test vectors for 256-bit key.
+Maybe a truncated variant test.
+Also, the R=4 truncated test currently uses rks length 18 but passes R=4. With key schedule, only 4 keys needed. The test uses provided rks (18 keys). That's OK; the code validates end_round < len(rks) and uses rks[0..3]. Actually with R=4, start=0, end=3 (not full_rounds), so rounds 0..3 are built. It needs rks[0..3]. Since rks list has 18 keys, OK.
+
+Now, about _normalize_key with integer key: It uses max(32, (k.bit_length() + 7) // 8). For variant byteadd_byteadd or xor_byteadd, key schedule still same. Good.
+
+Now I need to implement. I'll write the new qalqan.py. Since it's a large file, I'll create it fully. Let me draft.
+
+Also check what middle_round.nodes is. That should work.
+
+One more thing: With a separate add8x16_cipher template, I need to know the internal rk_node id to mutate. It will be a node id returned by add_subcipher(RK_CVL(...), []). For consistency, I'll store it.
+
+Potential problem: Reusing the same add8x16_cipher instance inside both middle_round_8 and final_add8 might cause naming conflicts or shared state? CiVerLy copies the subcipher when added. But we mutate the inner rk_node const before adding middle_round_8 to cipher; the mutation changes the template. Since middle_round_8 contains its own copy of add8x16_cipher, mutating middle_round_8.nodes[add8].nodes[rk_node].const is fine. For final_add8, if it's just add8x16_cipher directly, we mutate final_add8.nodes[rk_node].const before adding. That's fine.
+
+However, building final_add8 as add8x16_cipher means it's a Cipher with input 128, output 128. Then in the main cipher, for round N we do node = cipher.add_subcipher(add8x16_cipher, ...). But we need to mutate the key each time if we want to support slice where start=N (only final round). But for full cipher, round N occurs only once. For slices, final round may occur only once too. So mutating before the single use is fine. But to be safe and consistent, I'll build a wrapper final_add8_cipher that contains add8x16_cipher and exposes it; or I can treat add8x16_cipher as the final template directly and mutate its internal rk_node.const each time it's used. Since in full cipher final is used at most once, no issue. But for a slice start=N, it will be used once. For a slice ending before N, not used. OK.
+
+But what if user builds two ciphers from the same constructor? Each constructor call builds fresh templates. Good.
+
+Now let me think about possible issue: When using start/end parameters with variant, if start/end values are given, we need to validate against full_rounds and len(rks). Currently validates end >= len(rks). I'll keep.
+
+Now the constructor signature:
+
+def __init__(self, R=None, rks=None, key=None, start=None, end=None,
+             variant="original", name=None):
+But to maintain backward compatibility with positional args QALQAN_CVL(R, rks), keep R and rks first. The previous signature was (R=None, rks=None, key=None, start_round=None, end_round=None, name=None). So new signature: (R=None, rks=None, key=None, start=None, end=None, variant="original", name=None). This changes positional indices for name? Previously name was positional index 5. Now name index 6. If any code does QALQAN_CVL(..., ..., ..., ..., ..., "name"), it would break. But likely no one uses positional name. The user didn't mention. I think it's OK to add variant before name.
+
+Alternatively, put variant after name to preserve name position? But that would be weird. I'll put variant before name and accept minimal positional breakage.
+
+Actually, maybe I can keep start and end after variant? No, params order: R, rks, key, start, end, variant, name.
+
+Now, also need to update the docstring in cipher_implementations init? Probably not.
+
+Let's write the file.
+
+Before writing, I should also think about whether _build_byteadd_cipher should use XOR_CVL vs ModAdd_CVL. For byte-wise addition we need ModAdd_CVL(8). For original we already use ModAdd_CVL(8) for L layer. Fine.
+
+But for the first/last whitening XOR, RoundkeyXOR_CVL is a ConstXOR. That's fine. For byteadd_byteadd, no XOR whitening.
+
+Now in the docstring, I should also mention that variants are based on documentation/Qalqan modified.md.
+
+Let me also ensure the test vectors I computed are correct. They came from a script using the reference documentation/qalqan.py. I should double-check once via Sage. I'll trust them for now and run doctests later.
+
+One subtlety: For xor_byteadd variant, the middle key addition is byte-wise vector addition. The reference says: "The first modification has all its round key additions K^+_k modulo 2^128 substituted with additions K^⊞_k(x) = x ⊞ k." This means every middle round key addition becomes byte-wise addition. The mod 2^128 representation of the round key is interpreted as 16 bytes and each byte added mod 256. My script did exactly that.
+
+For byteadd_byteadd, first and last also byte-wise. Good.
+
+Now I'll write the file. I'll also update the test vectors and doctests. I may need to adjust line numbers. Since this is a complete rewrite of the class docstring and init, I'll write the full content.
+
+Actually, the file is 789 lines. I can overwrite it with write. But I must read it first (already did). So write is allowed.
+
+Let me prepare the new content up to line ~ maybe still around 800 lines.
+
+I should import nothing new except maybe no new imports. Components are already imported.
+
+Let me draft the new file content.
+
+"""
+CiVerLy implementation of the Qalqan block cipher and its modifications.
+
+...
+"""
+
+from sage.crypto.sbox import SBox
+
+from civerly.cipher import Cipher
+from civerly.component import (
+    RK_CVL,
+    ModAdd_CVL,
+    PermuteLayer_CVL,
+    RoundkeyXOR_CVL,
+    SBox_CVL,
+)
+
+SBOX = [...]
+
+_VARIANTS = {
+    "original": "original",
+    "qalqan_v1": "original",
+    "xor_byteadd": "xor_byteadd",
+    "qalqan_v1_xor_byteadd": "xor_byteadd",
+    "byteadd_byteadd": "byteadd_byteadd",
+    "qalqan_v1_byteadd_byteadd": "byteadd_byteadd",
+}
+Use a normalization that returns canonical name.
+
+Helper functions unchanged.
+
+Variant docstring added to class.
+
+In init:
+
+def __init__(self, R=None, rks=None, key=None, start=None, end=None,
+             variant="original", name=None):
+    if name is None:
+        name = "QALQAN"
+    if variant not in _VARIANTS:
+        raise ValueError(...)
+    variant = _VARIANTS[variant]
+    ...
+Key/rks mutual exclusion:
+
+if rks is not None and key is not None:
+    raise ValueError("rks and key/master_key are mutually exclusive.")
+Resolve full_rounds as before.
+
+Resolve start/end:
+
+if start is not None or end is not None:
+    if start is None or end is None:
+        raise ValueError("Both 'start' and 'end' must be provided.")
+    if R is not None:
+        raise ValueError("R cannot be combined with an explicit (start, end) range.")
+    start = int(start); end = int(end)
+    ...
+elif R is not None:
+    R = int(R)
+    start = 0
+    end = full_rounds if R == full_rounds else R - 1
+else:
+    start = 0; end = full_rounds
+Validate range.
+
+Obtain round keys: if rks is None derive from key. But we need needed = end + 1 (since end inclusive). For R case, we already set end. For default full, end=full_rounds, needed=N+1. Good.
+
+Validate needed <= len(rks) by checking end.
+
+Build layers.
+
+Build add128_cipher as before (for original).
+
+Build add8x16_cipher:
+
+add8x16_cipher = Cipher(128, 128, name="Add8x16")
+rk_node_8 = add8x16_cipher.add_subcipher(RK_CVL(128, const=0, name="rk"), [])
+nodes_add8 = []
+for j in range(16):
+    n = add8x16_cipher.add_subcipher(
+        ModAdd_CVL(8, name=f"ModAdd8_{j}"),
+        [(add8x16_cipher.IN, (8*j+b, b)) for b in range(8)]
+        + [(rk_node_8, (8*j+b, 8+b)) for b in range(8)]
+    )
+    nodes_add8.append(n)
+add8x16_cipher.add_output([...])
+Check output wiring: For each byte j, output bits from node n positions b to global positions 8*j+b.
+
+Build templates:
+
+if variant == "original":
+    middle_round = Cipher(128, 128, name="QalqanRound")
+    n_add = middle_round.add_subcipher(add128_cipher, ...)
+    ...
+    add_node_template = middle_round.nodes[n_add]
+    rk_node_to_mutate = ... need rk_node inside add_node_template. In current code they have `rk_node` from add128_cipher scope. Since `add128_cipher` is the template, and `n_add` is the node in middle_round referencing it, `middle_round.nodes[n_add]` is the subcipher instance. Its nodes dict has key `rk_node` (the integer id from add128_cipher). So `add_node_template.nodes[rk_node].const = ...` works. For byte-wise, similar.
+I need to keep rk_node variable accessible from add128_cipher scope. For add8x16_cipher, keep rk_node_8.
+
+Now for middle_round_8 (xor_byteadd/byteadd_byteadd middle):
+
+middle_round_8 = Cipher(128, 128, name="QalqanRound8")
+n_add8 = middle_round_8.add_subcipher(add8x16_cipher, ...)
+n_s8 = middle_round_8.add_subcipher(sbox_cipher, ...)
+n_l8 = middle_round_8.add_subcipher(l_cipher, ...)
+middle_round_8.add_output(...)
+add8_node_template = middle_round_8.nodes[n_add8]
+For final_add8 template (byteadd_byteadd final):
+
+final_add8 = Cipher(128, 128, name="QalqanFinal8")
+n_add8_final = final_add8.add_subcipher(add8x16_cipher, ...)
+final_add8.add_output([(n_add8_final, (i, i)) for i in range(128)])
+final_add8_node_template = final_add8.nodes[n_add8_final]
+Now assemble:
+
+cipher = Cipher(128, 128, name=name)
+node = cipher.IN
+current = start
+
+first_is_whitening = variant in ("original", "xor_byteadd")
+
+if current == 0:
+    if first_is_whitening:
+        # XOR -> S -> L
+        kw = RoundkeyXOR_CVL(128, rks[0], name="KeyAdd_start")
+        node = cipher.add_subcipher(kw, ...)
+        node = cipher.add_subcipher(sbox_cipher, ...)
+        node = cipher.add_subcipher(l_cipher, ...)
+    else:
+        # byte-wise ADD -> S -> L
+        add8_node_template.nodes[rk_node_8].const = int.from_bytes(rks[0].to_bytes(16, "big"), "big")
+        node = cipher.add_subcipher(middle_round_8, ...)
+    current = 1
+
+for r in range(current, end + 1):
+    is_final_whitening = (r == end and r == full_rounds)
+    if is_final_whitening:
+        if variant == "byteadd_byteadd":
+            final_add8_node_template.nodes[rk_node_8].const = int.from_bytes(rks[r].to_bytes(16, "big"), "big")
+            node = cipher.add_subcipher(final_add8, ...)
+        else:
+            kw = RoundkeyXOR_CVL(128, rks[r], name="KeyAdd_fin")
+            node = cipher.add_subcipher(kw, ...)
+    else:
+        if variant == "original":
+            add_node_template.nodes[rk_node].const = _byte_rev_int(rks[r])
+            node = cipher.add_subcipher(middle_round, ...)
+        else:
+            add8_node_template.nodes[rk_node_8].const = int.from_bytes(rks[r].to_bytes(16, "big"), "big")
+            node = cipher.add_subcipher(middle_round_8, ...)
+
+cipher.add_output(...)
+self.cipher = cipher
+But need rks[r] as bytes? Currently rks list is integers big-endian. _byte_rev_int takes int and returns int. For byte-wise, I want to set const to the big-endian int representation. rks[r] is already that. But when I convert to bytes and back, it's the same. Actually rks[r] is int.from_bytes(rk, "big"), so it's big-endian. Setting const = rks[r] for byte-wise is correct. The bytes conversion is unnecessary.
+
+Wait, does RK_CVL(128, const=...) convert to vector big-endian? eval returns int_to_vec(self.const, self.output_length), which is big-endian (bit 0 MSB). So indeed const should be big-endian int. For original mod 2^128 addition, the reference uses little-endian 128-bit addition, hence _byte_rev_int to reverse byte order. For byte-wise, no reversal. So const = rks[r].
+
+Now, is there any need to convert to bytes? For documentation, round keys in rks list are big-endian ints. Yes.
+
+Now, we need to be careful: RoundkeyXOR_CVL(128, rks[r]) also expects big-endian const. Its eval does x + int_to_vec(self.const, self.output_length), vector addition mod 2 (XOR). With big-endian const, this XORs the bytes in natural order. The reference xor_bytes(state, round_keys[0]) where round_keys are bytes in natural order. So rks[r] as big-endian int works. Good.
+
+Now, for byteadd_byteadd variant, when start > 0 and current = start, we skip the first round special. But we still need to handle final round if end == full_rounds. The loop handles that.
+
+One more thing: what if start == 0 but we want byteadd_byteadd variant and the final round is also included with end == full_rounds? The round 0 is done as middle_round_8, and round N as final_add8. Good.
+
+Now, the R parameter with variant: e.g., QALQAN_CVL(R=4, variant="xor_byteadd", rks=...). It sets start=0, end=3 (not full_rounds), so rounds 0..3 all ADD→S→L. But round 0 would be byte-wise add, not XOR. Is that the intended semantics for truncated variant? Probably yes - if you ask for first 4 rounds of the xor_byteadd variant, you include round 0 key addition (which in the variant is byte-wise because there's no whitening). Wait, but variant xor_byteadd says first key addition is XOR. So for R=4 with xor_byteadd, round 0 is XOR→S→L, rounds 1..3 are byte-wise. That matches the variant definition. Good.
+
+For byteadd_byteadd R=4, round 0 is byte-wise, rounds 1..3 byte-wise.
+
+Now R == full_rounds: end=full_rounds, final whitening included. For xor_byteadd final is XOR. For byteadd_byteadd final is byte-wise. For original final is XOR.
+
+Good.
+
+Now update doctests.
+
+Current doctests use start_round=2, end_round=5. Need to update to start=2, end=5. Also update the narrative.
+
+Add tests for variants: maybe for 256-bit key, compute ct with variant original and verify same as before, then xor_byteadd and byteadd_byteadd. Use test vectors computed earlier:
+
+xor_byteadd 256-bit key, pt bytes(range(16)): fad478f9b863b8278b251c2d7677ef0c
+byteadd_byteadd 256-bit key: 79077ef4a7d05c950f26416890799a62
+Add truncated variant test maybe.
+
+Also add an "Unnamed" component test for a variant maybe.
+
+Now, the user might want to include variants in the constructor. They maybe want parameter names matching the doc: ⊕⊞ etc. Use string aliases. I'll define aliases.
+
+Now, do I need to add any code to Cipher? No.
+
+Now, potential issue: add8x16_cipher with 16 ModAdd_CVL(8) instances and one RK_CVL. When instantiated inside middle_round_8, then inside cipher, the structure is nested. The SAT modeling should handle it. For differential, each ModAdd_CVL(8) has its own probability variables. The reports may show many components. That's expected.
+
+Now, the byte-wise addition layer might be better modeled as an AESlike MixColumn-like? No, because it's not GF(2)-linear. ModAdd_CVL is correct.
+
+Now, potential issue: For byteadd_byteadd, the SAT model for round 0 middle_round_8 includes S-box and L. Fine.
+
+Now, let's also update _rounds_for_key doc says 17..29? Actually key length 256..1024 steps of 128: N = 17 + ((bits-256)//128)*2. Bits=256→17, 384→19, 512→21, 640→23, 768→25, 896→27, 1024→29. Good. The modified.md says 17-23, but that's a typo; original spec says 17..29.
+
+Now let me write the file. I'll produce the entire content.
+
+I also need to update the docstring to mention variant and start/end.
+
+I'll keep _byte_rev_int, _rounds_for_key, _normalize_key, _check_key, _qalqan_round_keys unchanged.
+
+I need to re-read lines 249-789 to ensure my edits match structure. Already read. Good.
+
+Let's write.
+
+One more thought about RoundkeyXOR_CVL vs RK_CVL with XOR_CVL. RoundkeyXOR_CVL is a component, not a subcipher with key input. It has eval x + int_to_vec(const). For modeling differential, ConstXOR_CVL models OUT == IN (difference unchanged). So perfect.
+
+For byte-wise addition, using ModAdd_CVL(8) means the key is a constant fed as second input. Good.
+
+Now, code for output wiring of byte-wise add layer:
+
+add8x16_cipher.add_output(
+    [(nodes_add8[j], (b, 8*j+b)) for j in range(16) for b in range(8)]
+)
+Yes.
+
+Alright, write the file.
+
+(code modifications)
+
+
+The __new__ method and the rest of the constructor body were truncated during my writing because the doctests became very long and I actually replaced the whole file content but forgot the actual implementation. I need to rewrite the file completely, this time including the full implementation. I should also take care to actually implement the variants.
+
+Let me write the full implementation now. I need to be careful with file length, but I think I can do it in one write call after reading. I'll implement:
+
+_build_layer and helpers inside the class.
+variant handling.
+start/end renaming and backward compat.
+new doctests for variants.
+test vectors precomputed.
+Let me also think about how to implement the variants with components:
+
+original: middle rounds use ModAdd_CVL(128) with byte reversal start and end, first/last use RoundkeyXOR_CVL.
+xor_byteadd: first/last use RoundkeyXOR_CVL, middle use 16 byte-wise ModAdd_CVL(8).
+byteadd_byteadd: first/last and middle all use 16 byte-wise ModAdd_CVL(8).
+For byte-wise additions I need a subcipher like:
+
+add8_cipher = Cipher(128,128,name="Add8Layer")
+for each byte j:
+    rk_node = RK_CVL(8, const=...)
+    modadd = ModAdd_CVL(8)
+    wire input bits 8j..8j+7 to modadd input 0..7
+    wire rk_node bits 0..7 to modadd input 8..15
+    wire modadd output bits 0..7 to cipher output 8j..8j+7
+The first/last whitening for byteadd_byteadd will be this Add8Layer instead of RoundkeyXOR_CVL.
+
+For original and xor_byteadd first/last are XOR whitening (RoundkeyXOR_CVL).
+
+The middle round template depends on variant. I should build two reusable middle round templates:
+
+middle_add128 for original.
+middle_add8 for xor_byteadd and byteadd_byteadd.
+Both are then followed by S and L identical.
+
+Let me write this carefully.
+
+Also I must compute the variant slice test vector. I already have a reference to compute it. Let me compute xor_byteadd round 2-4 vector.
+
+Also need to handle R vs start/end conflict: if both provided, raise a ValueError. If start provided without end, raise. And old start_round/end_round translated to start/end.
+
+Also when constructing, if variant is invalid, raise.
+
+Let me also add _byteadd_variant helper function.
+
+I will now write the complete file. I already read it, so write is allowed.
+
+(code modifications)
+
+(bug hunt)
+
+I need to rewrite the byte-add key layer so that each byte addition is a separate subcipher, not nested inside another Cipher. That way the round templates can set the RK constants through first_round.nodes[n].const directly, matching the existing original-variant pattern.
+
+Plan:
+
+For the byte-wise key addition variants, build the first/middle/final round templates by wiring 16 independent ModAdd_CVL(8) components each fed by its own RK_CVL(8).
+Store the 16 RK node indices per template, then mutate each .const in the assembly loop.
+Keep the original 128-bit ModAdd path for the original variant.
+This removes nested Cipher issues and keeps mutation simple. Also need to make sure the byte ordering matches CiVerLy's big-endian vector interpretation: byte j in int.from_bytes(rk, "big") is bits 8*(15-j)..8*(16-j), so the RK constant for byte j is (rk >> (8*(15-j))) & 0xFF. Since RK_CVL outputs bits MSB-first within the 8-bit word, this is correct as the ModAdd_CVL(8) input is also MSB-first. Make sure the byte positions in the state (bits 0-127 with bit 0 MSB of byte 0) are correctly wired.
+
+Now write the corrected file. Also fix the first-round template wiring: when byteadd for whitening, S box should receive output of byte-add layer, not input. Final round should output the byte-add output directly.
+
+Also note: the first_round and middle_round templates are going to be deepcopied each round, but the constants are set on the template before adding to cipher. Good. For byte-wise final round, also set constants before add_subcipher.
+
+I'll also need to handle the case start != 0 where the first round is a middle round — but the existing code correctly uses current = start and always adds middle-round template for r in range(current, end+1); when start==0 it does first-round template then middle. If start>0, all rounds are middle. Need to set byte-add constants in this loop as well. Already done.
+
+One subtle issue: when start > 0 and end == full_rounds, the final loop iteration is final whitening; this is correct. But the byteadd variant constants for that final whitening are set inside the if-branch.
+
+For the original variant, the first round uses XOR constant set on template, middle uses ModAdd128 set via middle_key_template.const = _byte_rev_int(rks[r]).
+
+Now implement.
+
+The make_byte_key_add helper adds outputs directly to the middle_round / first_round template, then I also add a separate S-layer and output — causing duplicate outputs into OUT. For the byte-wise variants, I need to build the byte-add layer as a separate template cipher and add it as a subcipher into the round template, then wire S from that subcipher's output (using its node index). The inner RK indices should be captured after adding to the round template so they refer to the deepcopied instance inside each round template.
+
+Plan:
+
+Create add8_byte_cipher = Cipher(128,128, name="Add8_byte") using make_byte_key_add. It will have its own outputs connecting each byte-add result to its OUT. That is fine for the standalone layer cipher.
+In first_round / middle_round / final_round, add this cipher as a subcipher n_key_byte = round.add_subcipher(add8_byte_cipher, ...). The RK nodes inside the copy are at known positions; capture them with first_key_rk_nodes = [i for i,n in enumerate(first_round.nodes[n_key_byte].nodes) if n.name.startswith("rk_")], then set via first_round.nodes[n_key_byte].nodes[idx].const = ....
+For first/middle round then wire S from n_key_byte (not from round.IN). For final round, wire output from n_key_byte.
+That returns to nested cipher but with a cleaner indexing. Since only one instance of add8_byte_cipher is added per round template and then the template is duplicated for each round, constants set on first_round.nodes[n_key_byte].nodes[idx] before cipher.add_subcipher(first_round, ...) will be copied into each round instance. Good.
+
+I need to ensure make_byte_key_add outputs to its own OUT, and first_round etc. add the layer as a subcipher but don't use its OUT; they wire from the layer's output node. Since add_subcipher adds edges to the subcipher's IN, and we can reference the subcipher node index n_key_byte as the source when wiring S. Good.
+
+Implement.
+
+(code modifications, small bug hunt)
+
+User:
+I hit a problem with your modifications. The code in @documentation/Qalqan.sage is not working anymore. The errors are @documentation/error report.txt  . Please review your Modifications. From my perspective, maybe your extensive usage of the Cipher component could be the root cause. But please form an own opinion!. Sage is installed via nix.
+
+(reconstructing the error)
+
+These small repros do not trigger the reported error. Need to reproduce with the actual qalqan.py structure. I suspect the issue may be that in Qalqan first round contains RoundkeyXOR_CVL, and middle round contains Add128 layer. first_round and middle_round are different top ciphers (top nodes not equal), so no caching conflict at outer level. However inside first_round there is a RoundkeyXOR_CVL named KeyAdd_whiten; inside middle_round there is a nested Add128 cipher which itself contains an RK_CVL named rk. Wait the error reported is 'RoundkeyXOR_CVL' object has no attribute 'dictionaries_sat', not RK_CVL.
+
+The failure occurs in _copy_over_dictionaries_recursively when copying self.dictionaries_sat = deepcopy(prev.dictionaries_sat) on a RoundkeyXOR_CVL object. That means a component received prev that is a Cipher but self is a RoundkeyXOR_CVL? Because in _copy_over_dictionaries_recursively on a Cipher, it iterates self.nodes[i]._copy_over_dictionaries_recursively(prev.nodes[i], ...). If self is a RoundkeyXOR_CVL, then self must be a node inside a Cipher. The base method from Component just returns. But the error traceback says line 2342 inside _copy_over_dictionaries_recursively — that's the Cipher method? Wait line 2342 was self.dictionaries_sat = deepcopy(prev.dictionaries_sat) and traceback says at that line in cipher.py inside _copy_over_dictionaries_recursively of RoundkeyXOR_CVL. But the method is defined on Cipher, not RoundkeyXOR_CVL. Unless RoundkeyXOR_CVL acquired that method via monkey patch? It shouldn't.
+
+Actually traceback shows file cipher.py, line 2346 self.nodes[i]._copy_over_dictionaries_recursively(prev.nodes[i], model_options). Then line 2342 self.dictionaries_sat = deepcopy(prev.dictionaries_sat). So the inner recursive call is on a Cipher node too, not a component. The self there is a Cipher, prev is also a Cipher. The exception is AttributeError: 'RoundkeyXOR_CVL' object has no attribute 'dictionaries_sat'. That means prev.dictionaries_sat is accessed but prev is a RoundkeyXOR_CVL. This could happen if self.nodes[i] is a Cipher but prev.nodes[i] is a component, meaning at the same index one cipher has a subcipher and the other has a component — structure mismatch. This likely stems from deepcopy equality caching: because my new first_round and middle_round templates reuse add8_byte_cipher etc. Wait original variant uses RoundkeyXOR_CVL in both first and final round templates. Original code originally used a single RoundkeyXOR_CVL object? Let's check current code: in my refactored code, each template has its own RoundkeyXOR_CVL instances (first, middle? Actually middle uses ModAdd128; first and final have separate RoundkeyXOR_CVL calls). But maybe due to __eq__ hash of RoundkeyXOR_CVL, Cipher.add_subcipher deepcopy sees them as equal and does caching incorrectly? The equality is type+hash. Hash for Component uses some fields.
+
+Actually the modeling code checks if comp == prev: for components at the same index; if equal, it assumes they're copies and copies SAT dictionaries. If two distinct components are considered equal (because same type and hash), it tries to copy over dictionaries. The _copy_over_dictionaries_recursively is then called on comp (the component) with prev (also component). For Component base method, it returns. But if comp is a Cipher (subcipher) and considered equal to a previous subcipher, it calls _copy_over_dictionaries_recursively recursively. This works when structures identical.
+
+In my new code, I have multiple Cipher subciphers that may be equal? Some round templates might accidentally use the same nested Cipher object? Let's examine: I built add8_byte_cipher = Cipher(...) once, then added it to first_round, middle_round, final_round. When add_subcipher is called, it deepcopies it, so each template has its own independent copy. But the original add8_byte_cipher is reused across templates. That is fine. But then first_round and final_round both use add8_byte_cipher as a subcipher; when both are added to outer cipher, they are deepcopied and are compared for equality. Since they are structurally identical (same names etc.), first_round == final_round? That's possible if hash matches. But more importantly, within a single round template, the two instances of add8_byte_cipher are separate deepcopies, but due to hash equality might be treated as equal? This could cause structural mismatch if the deepcopy equality cache picks wrong template. Let's inspect actual case with original variant (R=2) which fails. There is no add8_byte_cipher because use_byteadd=False. So why fail? For original variant, the only RoundkeyXOR_CVL used are in first_round (KeyAdd_whiten) and final_round (KeyAdd_whiten). The names are the same; maybe first_round and final_round are considered equal? They have different subcipher structure? first_round: KeyAdd_whiten, SBoxLayer, L. final_round: KeyAdd_whiten, OUT. So not equal. But the RoundkeyXOR_CVL components are equal (same type, same hash?) and appear as first_round.nodes[1] and final_round.nodes[1]. The modeling code iterates over outer nodes: node1 (first_round), node2 (middle_round). It will model node1; then node2 is different. Then final_round is node3? For R=2 full cipher includes first round + final whitening (because R==full_rounds). So outer nodes: IN, first_round, final_round, OUT. Wait QALQAN_CVL(R=2, key=0) with default variant original and key length 256 => full_rounds=17, R=2 != full_rounds, so it constructs start=0, end=R-1=1. That means first round (round 0) and one middle round (round 1) with no final whitening. So nodes: IN, first_round, QalqanRound, OUT. The middle round contains Add128 nested cipher, which contains RK_CVL named rk. The first round contains RoundkeyXOR_CVL named KeyAdd_whiten.
+
+When modeling, first_round is modeled. Then middle_round: its top cipher is different from first_round, no caching. Inside middle_round, its nodes: IN, Add128, SBoxLayer, L, OUT. Add128 is a Cipher containing rev_in, rk (RK_CVL), ModAdd128, rev_out. None equal to RoundkeyXOR. So where does RoundkeyXOR get a recursive call with prev Cipher?
+
+The traceback specifically: self.dictionaries_sat = deepcopy(prev.dictionaries_sat) at line 2342 inside Cipher._copy_over_dictionaries_recursively. The exception 'RoundkeyXOR_CVL' object has no attribute 'dictionaries_sat' means the prev argument passed to the recursive call is a RoundkeyXOR_CVL. That can happen if at some level, self.nodes[i] is a Cipher but prev.nodes[i] is a RoundkeyXOR_CVL. That would be a structural mismatch. When could that happen? If two outer nodes are considered equal (first_round equal to something else), then the cache branch enters: comp.sat = prev.sat, comp._copy_over_dictionaries_recursively(prev, model_options). Here comp is a Cipher (top round template) and prev is also a Cipher. Fine. But then inside the recursive call, it iterates child nodes. If prev and self have different child node types at the same index, because the top ciphers were incorrectly considered equal despite different internal structure. That could happen if Cipher.__eq__ / __hash__ does not account for internal node structure.
+
+The equality/hashing of Cipher uses what? Let's inspect __hash__ and __eq__. A Cipher's hash might depend only on name and dimensions? If first_round and final_round have same name? No, name="QalqanFirstRound" vs name="QalqanFinalRound". But maybe hash of subciphers inside is not included leading to collisions: if two RoundkeyXOR_CVL components are considered equal to two RK_CVL components? Wait the issue could be that inside Add128 nested cipher, the RK_CVL named rk has the same hash as the RoundkeyXOR_CVL named KeyAdd_whiten? No, different types, so __eq__ returns false via type(self) is type(other).
+
+Let's actually reproduce and look at equality. Use QALQAN_CVL(R=2, key=0) and print equality of outer nodes.
+
+Bingo: first_round and middle_round are considered equal because Cipher.__hash__/__eq__ apparently only compares a subset of structure (ignores component at index 1: KeyAdd_whiten vs Add128). This causes the SAT modeler to treat them as the same component and copy SAT dictionaries recursively. It copies from prev (first_round) into comp (middle_round). Then inside _copy_over_dictionaries_recursively, it iterates child nodes. At index 1, self.nodes[1] = Add128 (a Cipher) but prev.nodes[1] = KeyAdd_whiten (RoundkeyXOR_CVL). When calling self.nodes[1]._copy_over_dictionaries_recursively(prev.nodes[1], ...), self is the Add128 Cipher and prev is a RoundkeyXOR_CVL. The Cipher method then tries self.dictionaries_sat = deepcopy(prev.dictionaries_sat), which doesn't exist on RoundkeyXOR_CVL, causing the reported error.
+
+So the root cause is indeed my extensive usage of Cipher components that are being considered equal by CiVerLy's internal hashing, because the hash doesn't include all nodes.
+
+I need to make the round templates distinguishable so CiVerLy doesn't merge them. Options:
+
+Give each Cipher template unique names. I already have QalqanFirstRound vs QalqanRound. But they still hash equal. Maybe Cipher.__hash__ doesn't include name. Need to inspect.
+Let's check Cipher.__hash__ and __eq__.
+
+The hash collision is confirmed. Now I need a robust fix. Options:
+
+Avoid using multiple different Cipher subcipher templates. Build each round directly in the main loop with its components, not via reusable first_round/middle_round Cipher templates. That removes the top-level Cipher equality issue. This is the simplest and most robust, because components like SBox_CVL have different hashes from RoundkeyXOR_CVL. It also aligns with the user's suspicion about extensive Cipher usage.
+Force different hashes by injecting a distinguishing attribute into the templates, e.g., a unique name or a dummy metadata field that affects __hash__. But Cipher.__hash__ hashes self.__dict__ items? Wait Cipher.__hash__ uses only nodes+edges hashes, not the name. It doesn't include _Cipher__name because the dict item key is _Cipher__name, but the arr doesn't include it; only (hash(a), hash(b)) edges and outputs. So names are ignored. Adding an extra unique node/edge would change hash. But we don't want to add fake components.
+Build one universal round template and vary key/mode per round, but first/last round differs (has S/L vs not), and byte-add variants differ. Too complex.
+I think option 1 is best: construct the DAG directly in the top-level cipher loop, adding layers as components/subciphers without wrapping each round in its own Cipher. The original (pre-modification) qalqan implementation also built a middle_round template but apparently did not trigger the collision because first round was constructed separately and not equal. In my new version, I separated first/middle/final into separate Cipher templates, but they accidentally hash equal because they share SBoxLayer and L and IN/OUT and have same dimensions/edges after ignoring key component type.
+
+But wait, original code also had first_round? It built separate: it did not have a first_round template; it created kw = RoundkeyXOR_CVL(...) directly, then added sbox_cipher and l_cipher to top cipher. For middle it built middle_round = Cipher(...) and reused it. That prevented first/middle equality because first round's top-level nodes are components, middle round is a Cipher. But my refactored code for variants introduced first_round = Cipher(...) and final_round = Cipher(...) templates to handle XOR vs byte-add uniformly. This caused the hash collision because first_round top-level has same structure as middle_round (SBoxLayer and L), ignoring the key component type.
+
+Actually the original code's middle_round also contains S+L and Add128; it didn't collide with direct-top S+L because top-level structure differs. So to fix, we can revert to not wrapping first and final rounds in separate Cipher templates; only keep middle-round as a Cipher template if needed (but avoid collisions with direct-top first/final). However with byte-add variants, middle-round also changes (uses byte-add layer in xor_byteadd/byteadd_byteadd). We can still build per-round directly.
+
+Simpler: build every round directly on the top-level cipher, using helper functions to add the appropriate key-addition, S, L layers. This avoids any round-level Cipher templates and subsequent equality/caching issues. It also makes slicing work exactly the same. The only downside is repeated S-box and L components; but add_subcipher deepcopies components anyway. We can reuse component objects (SBox_CVL, ModAdd_CVL, etc.) as before; they are deepcopied so equality collisions at top level will be between different subciphers? Wait if we add multiple sbox_cipher subciphers directly, the top-level Cipher.__hash__ will see them as equal? But in SAT modeling, Cipher._model_sat caches by comp == prev. If two sbox_cipher subciphers are added directly to the outer cipher and are equal, it tries to copy SAT dictionaries via Cipher._copy_over_dictionaries_recursively? For components (SBox_CVL inside sbox_cipher subcipher), the base Component method returns; for Cipher subciphers (sbox_cipher itself is a Cipher), it recurses. Since both sbox_cipher instances are equal, copying dictionaries recursively should work because their structures are identical. So direct construction with reusable sbox_cipher and l_cipher templates is fine.
+
+Plan:
+
+Keep sbox_cipher and l_cipher as reusable Cipher layer templates.
+Keep add128_cipher and add8_byte_cipher as reusable key-addition layer templates.
+In the main loop, add these subciphers to the top-level cipher directly, mutating per-round constants before each add_subcipher.
+For first round: add RoundkeyXOR_CVL (or add8_byte_cipher) then sbox_cipher then l_cipher directly to outer cipher.
+For middle rounds: add key addition (Add128 or add8_byte_cipher) then sbox then L directly to outer cipher.
+For final round: add key addition only.
+This removes first_round, middle_round, final_round Cipher templates entirely, eliminating hash collisions between different round templates.
+
+Need to handle constants mutation with direct templates:
+
+For original middle: add128_cipher.nodes[rk_node].const = _byte_rev_int(rks[r]) before cipher.add_subcipher(add128_cipher, ...).
+For byte-add middle/first/final: need to set constants inside add8_byte_cipher before adding. Since add_subcipher deepcopies, mutating the template's nested RK nodes before each addition will be copied. Need to capture the RK indices inside add8_byte_cipher template. add8_byte_cipher is a Cipher containing 16 RK nodes and 16 ModAdd nodes. We can store byte_rk_indices from it.
+Important: When cipher.add_subcipher(add8_byte_cipher, ...) is called, it deepcopies. The template's constants are set right before. Good. But after adding, the template's constants should ideally be reset? Not necessary because we set them again before next use; but to avoid leftover values if a round isn't built, fine.
+
+For RoundkeyXOR_CVL first/final, we can create the component object with name="KeyAdd_whiten" and set .const before adding. Since it's a component, no nested indices.
+
+But for byte-add first/final, we add the whole add8_byte_cipher template. That is a Cipher, which could potentially collide with the middle-round add8_byte_cipher if both are added at top level. But they are the same structure (both add8_byte_cipher) and being equal is intended; recursive copy should be safe because they're identical Ciphers. However we must ensure that after the first is added, the second triggers the caching path that copies dictionaries recursively. The inner RK nodes are also identical and have same dictionaries; should be fine. The issue earlier was first_round vs middle_round being equal but structurally different. Now all add8_byte_cipher instances are identical, so equal is correct.
+
+One more collision: sbox_cipher and l_cipher both added multiple times; they are identical, so equal is correct. Recursive dictionary copy works.
+
+Potentially RoundkeyXOR_CVL first and final could be equal (same name, same const after setting). If both added directly, they are components; Component base _copy_over_dictionaries_recursively returns, so no issue. The caching path in _model_sat for components copies sat, SAT_IN, etc. and calls comp._copy_over_dictionaries_recursively(prev, model_options) which returns because base Component method returns. So safe.
+
+But wait, RoundkeyXOR_CVL inherits ConstXOR_CVL and its hash includes const. If first/last consts differ, hashes differ, no caching. If equal, caching safe.
+
+Now implement this direct DAG construction. Need to keep the same evaluation/test vectors. The previous structure order: first round node had KeyAdd->S->L in a first_round subcipher, then middle in middle_round, then final in final_round. Direct construction will create a longer chain of subciphers: KeyAdd, SBoxLayer, L, Add128, SBoxLayer, L, ... Caching still fine and trails will show individual components, maybe even better for readability. However the get_trail test expects no unnamed components and all named. Our components have names.
+
+Also ensure add8_byte_cipher (when used for final whitening) is wired directly to output. When final round is added, after it we call cipher.add_output from last node; if final round is add8_byte_cipher, then node is that subcipher; we then add_output from it. Fine.
+
+Let's check if there's any requirement from cipher.add_subcipher that an added subcipher must be deepcopied and not reused while still attached? It deepcopies. So we can reuse.
+
+Implementation details:
+
+Create reusable add8_byte_cipher = Cipher(128,128, name="Add8_byte") with _byte_rk_indices captured.
+Create reusable add128_cipher and capture rk_node index as before.
+Create a RoundkeyXOR_CVL(128, 0, name="KeyAdd_whiten") component for XOR whitening.
+Assemble cipher directly in loop:
+node = cipher.IN
+current = start
+if current == 0:
+if use_byteadd_for_whitening: set byte keys in add8_byte_cipher, node = add_subcipher(add8_byte_cipher, ...)
+else: create kw = RoundkeyXOR_CVL(128, rks[0], name="KeyAdd_start") directly: node = add_subcipher(kw, ...)
+node = add_subcipher(sbox_cipher, ...)
+node = add_subcipher(l_cipher, ...)
+current = 1
+for r in range(current, end+1):
+if r == end and r == full_rounds:
+if use_byteadd_for_whitening: set byte keys, node = add_subcipher(add8_byte_cipher, ...)
+else: node = add_subcipher(RoundkeyXOR_CVL(128, rks[r], name="KeyAdd_fin"), ...)
+else:
+if use_byteadd_for_middle: set byte keys, node = add_subcipher(add8_byte_cipher, ...)
+else: add128_cipher.nodes[rk_node].const = _byte_rev_int(rks[r]); node = add_subcipher(add128_cipher, ...)
+node = add_subcipher(sbox_cipher, ...)
+node = add_subcipher(l_cipher, ...)
+cipher.add_output([(node, (i,i)) for i in range(128)])
+Now, the add8_byte_cipher template: after being added once and deepcopied, can we mutate it again? Yes, we mutate the template object before each addition. The deepcopy creates independent copies. Good.
+
+But we need to be careful: when use_byteadd_for_middle and use_byteadd_for_whitening both true (byteadd_byteadd), the final round also uses add8_byte_cipher. In the loop for middle rounds, after adding a middle round, add8_byte_cipher gets mutated for next round. Good.
+
+Also note that RoundkeyXOR_CVL is mutable (const can change). In the original code, they created it once and reused, setting const each round. That's fine because add_subcipher deepcopies. But if we create a new one per round with the const passed at construction, also fine. Simpler: create per round. Let's name them KeyAdd_start, KeyAdd_r{r}, KeyAdd_fin.
+
+For the byte-add variant, naming the add8_byte_cipher template once means each added copy has the same internal names. Multiple copies may collide (correctly) and recursive dictionary copy works. Good.
+
+Let's implement and verify.
+
+One concern: In direct construction, if byte-add layer is added at top level multiple times, and they are equal, the SAT modeler will copy SAT dictionaries recursively. The inner Add8_byte Ciphers each contain RK_CVL components. RK_CVL components may be equal across copies (same name, const). Recursive copy should be fine. But there is a subtle issue: the add8_byte_cipher has outputs wired to its OUT special node. When copied into outer cipher, those outputs are not used; the outer cipher uses the layer's output node index as source for next subcipher (sbox_cipher). Wait add8_byte_cipher is a Cipher with output mapping to its own OUT. When added as a subcipher, add_subcipher only wires edges from source to the subcipher's inputs; it does not consume outputs. The outer cipher then uses the returned node index (the whole subcipher) as source for edges. The Cipher.eval/modeling will treat the subcipher's output as its OUT, and edges from that node refer to its outputs. So the internal add_output inside add8_byte_cipher is necessary. Good.
+
+But add8_byte_cipher as a subcipher has input/output length 128, and its OUT is connected to the outputs of the ModAdds. The outer edge from node n_add to sbox maps bits 0..127 of n_add (its output) to sbox inputs. Good.
+
+Now implement.
+
+(Code modifications)
+
+Interruption of the process
+
+User:
+I interrupted the code execution but it seems to work. Another thing that I worry about is the complexity of the model. It is extremely huge compared to other ciphers given that we only look at the first two rounds. 
+8111 variables and 297832 clauses were written to 'temp/QALQAN.cnf' for R=2. 
+Is there a way to optimize this?
+
