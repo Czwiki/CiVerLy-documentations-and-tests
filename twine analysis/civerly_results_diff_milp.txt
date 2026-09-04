@@ -1,0 +1,59 @@
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+1016 variables and 1577 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+1776 variables and 2961 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+2536 variables and 4345 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+3296 variables and 5729 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+4056 variables and 7113 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+4816 variables and 8497 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+5576 variables and 9881 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+6336 variables and 11265 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+7096 variables and 12649 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+7856 variables and 14033 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+8616 variables and 15417 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+9376 variables and 16801 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+10136 variables and 18185 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+Using existing file temp/espresso-2d87a653_out.pla, make sure it is up to date!
+10896 variables and 19569 constraints were written to 'temp/TWINE.mps'
+Output file in: temp/TWINE.pdf
+
+
+ Differential Times:
+Time taken for 1 rounds: 0.63 seconds
+Time taken for 2 rounds: 1.60 seconds
+Time taken for 3 rounds: 2.85 seconds
+Time taken for 4 rounds: 5.39 seconds
+Time taken for 5 rounds: 6.59 seconds
+Time taken for 6 rounds: 8.92 seconds
+Time taken for 7 rounds: 23.89 seconds
+Time taken for 8 rounds: 49.94 seconds
+Time taken for 9 rounds: 190.04 seconds
+Time taken for 10 rounds: 981.74 seconds
+Time taken for 11 rounds: 8384.60 seconds
+Time taken for 12 rounds: 2510.13 seconds
+Time taken for 13 rounds: 21701.06 seconds
+Time taken for 14 rounds: 23254.97 seconds
